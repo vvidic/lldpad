@@ -81,11 +81,6 @@ install-data-local: lldpad.init
 	$(MKDIR_P) $(DESTDIR)/etc/init.d
 	$(INSTALL_SCRIPT) lldpad.init $(DESTDIR)/etc/init.d/lldpad
 
-install-data-hook:
-	## provide legacy support for apps that use the old dcbd interface.
-	test -e $(includedir)/dcbd || `ln -T -s $(includedir)/lldpad $(includedir)/dcbd`
-	test -e $(includedir)/dcbd/clif_cmds.h || `ln -T -s $(includedir)/lldpad/lldp_dcbx_cmds.h $(includedir)/dcbd/clif_cmds.h`
-
 uninstall-local:
 	rm -f '$(DESTDIR)/etc/init.d/lldpad'
 	rm -f '$(includedir)/dcbd/clif_cmds.h'
