@@ -1,0 +1,5 @@
+lldpad (0.9.38-1) experimental; urgency=low
+
+  * Initial release (Closes: #605798)
+
+ -- Liang Guo <bluestonechina@gmail.com>  Wed, 08 Dec 2010 13:44:22 +0800
