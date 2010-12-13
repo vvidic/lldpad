@@ -1,3 +1,4 @@
 dont-use-embedded-libconfig.patch
 dont-run-chkconfig-when-install-data.patch
 dont-create-link-when-install-data.patch
+fix-lintian-warning-on-lldpad-init.patch
