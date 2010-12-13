@@ -2,7 +2,7 @@ Source: lldpad
 Priority: extra
 Maintainer: Debian FCoE Packaging <pkg-fcoe-general@lists.alioth.debian.org>
 Uploaders: Liang Guo <bluestonechina@gmail.com>
-Build-Depends: debhelper (>= 7.0.50~), autotools-dev
+Build-Depends: debhelper (>= 7.0.50~), autotools-dev, pkg-config, libconfig8-dev
 Standards-Version: 3.9.1
 Section: net
 Homepage: http://sourceforge.net/projects/e1000
