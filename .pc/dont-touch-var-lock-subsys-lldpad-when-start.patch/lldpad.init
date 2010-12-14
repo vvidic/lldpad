@@ -155,13 +155,13 @@ case "$1" in
 		$LLDPAD_BIN -k
 		start_daemon $LLDPAD_BIN -d $OPTIONS
 		rc_status -v
-		#[ $? -eq 0 ] && touch /var/lock/subsys/lldpad
+		[ $? -eq 0 ] && touch /var/lock/subsys/lldpad
 		;;
 	stop)
 		echo -n $"Shutting down $LLDPAD: "
 		killproc $LLDPAD
 		rc_status -v
-		#[ $? -eq 0 ] && rm -f /var/lock/subsys/lldpad
+		[ $? -eq 0 ] && rm -f /var/lock/subsys/lldpad
 		;;
 	status)
 		echo -n "Checking for service $LLDPAD: "
