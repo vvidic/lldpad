@@ -1,5 +1,9 @@
 lldpad (0.9.38-1) experimental; urgency=low
 
+  [ Liang Guo ]
   * Initial release (Closes: #605798)
 
- -- Liang Guo <bluestonechina@gmail.com>  Wed, 08 Dec 2010 13:44:22 +0800
+  [ Ritesh Raj Sarraf ]
+  * Also close dcbd ITP since it was renamed to lldpad (Closes: #572457) 
+
+ -- Ritesh Raj Sarraf <rrs@debian.org>  Sun, 17 Apr 2011 14:23:38 +0530
