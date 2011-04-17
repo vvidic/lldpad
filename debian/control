@@ -13,7 +13,7 @@ Package: lldpad-dev
 Section: libdevel
 Architecture: any
 Depends: ${misc:Depends}
-Description: A Link Layer Discovery Protocol Implementation (Development headers)
+Description: Link Layer Discovery Protocol Implementation (Development headers)
  The lldpad package is an implementation of the Link Layer Discovery Protocol
  (LLDP).  It originated from Intel's Data Center Bridging (DCB) software - the
  dcbd package.  The lldpad package adds LLDP support for all ports in addition
@@ -31,7 +31,7 @@ Description: A Link Layer Discovery Protocol Implementation (Development headers
 Package: lldpad
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: A Link Layer Discovery Protocol Implementation (Runtime)
+Description: Link Layer Discovery Protocol Implementation (Runtime)
  The lldpad package is an implementation of the Link Layer Discovery Protocol
  (LLDP).  It originated from Intel's Data Center Bridging (DCB) software - the
  dcbd package.  The lldpad package adds LLDP support for all ports in addition
