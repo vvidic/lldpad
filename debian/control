@@ -1,6 +1,6 @@
 Source: lldpad
 Priority: extra
-Maintainer: Debian FCoE Packaging <pkg-fcoe-maintainers@lists.alioth.debian.org>
+Maintainer: Debian FCoE Maintainers <pkg-fcoe-maintainers@lists.alioth.debian.org>
 Uploaders: Ritesh Raj Sarraf <rrs@debian.org>, Liang Guo <bluestonechina@gmail.com>
 Build-Depends: debhelper (>= 7.0.50~), autotools-dev, pkg-config, libconfig8-dev
 Standards-Version: 3.9.1
