@@ -1,3 +1,10 @@
+lldpad (0.9.38-2) experimental; urgency=low
+
+  * [7588ce3] make lintian clean
+  * [e22837b] fix maintainer email address
+
+ -- Ritesh Raj Sarraf <rrs@debian.org>  Thu, 28 Apr 2011 22:40:00 +0530
+
 lldpad (0.9.38-1) experimental; urgency=low
 
   [ Liang Guo ]
