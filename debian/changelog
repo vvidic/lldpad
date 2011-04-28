@@ -5,5 +5,7 @@ lldpad (0.9.38-1) experimental; urgency=low
 
   [ Ritesh Raj Sarraf ]
   * Also close dcbd ITP since it was renamed to lldpad (Closes: #572457) 
+  * [7588ce3] make lintian clean
+  * [e22837b] fix maintainer email address
 
- -- Ritesh Raj Sarraf <rrs@debian.org>  Sun, 17 Apr 2011 14:23:38 +0530
+ -- Ritesh Raj Sarraf <rrs@debian.org>  Thu, 28 Apr 2011 23:23:54 +0530
