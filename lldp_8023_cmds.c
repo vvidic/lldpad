@@ -20,13 +20,10 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "includes.h"
-#include "common.h"
 #include <stdio.h>
 #include <syslog.h>
 #include <sys/un.h>
@@ -44,16 +41,19 @@
 #include "clif_msgs.h"
 #include "lldp/states.h"
 
-static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *);
-static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *);
+static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int test_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
 
 static struct arg_handlers arg_handlers[] = {
-	{ ARG_TLVTXENABLE, get_arg_tlvtxenable, set_arg_tlvtxenable },
+	{ ARG_TLVTXENABLE, TLV_ARG,
+		get_arg_tlvtxenable, set_arg_tlvtxenable,
+		test_arg_tlvtxenable },
 	{ NULL }
 };
 
 static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+			       char *obuf, int obuf_len)
 {
 	int value;
 	char *s;
@@ -69,9 +69,9 @@ static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 	case (LLDP_MOD_8023 << 8) | LLDP_8023_MAXIMUM_FRAME_SIZE:
 		snprintf(arg_path, sizeof(arg_path), "%s%08x.%s",
 			 TLVID_PREFIX, cmd->tlvid, arg);
-		
-		if (get_config_setting(cmd->ifname, arg_path, (void *)&value,
-					CONFIG_TYPE_BOOL))
+
+		if (get_config_setting(cmd->ifname, cmd->type, arg_path,
+				       &value, CONFIG_TYPE_BOOL))
 			value = false;
 		break;
 	case INVALID_TLVID:
@@ -84,15 +84,15 @@ static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 		s = VAL_YES;
 	else
 		s = VAL_NO;
-	
-	sprintf(obuf, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
+
+	snprintf(obuf, obuf_len, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
 		(unsigned int)strlen(s), s);
 
 	return cmd_success;
 }
 
-static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+static int _set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+				char *obuf, int obuf_len, bool test)
 {
 	int value;
 	char arg_path[256];
@@ -119,15 +119,32 @@ static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 	else
 		return cmd_invalid;
 
+	if (test)
+		return cmd_success;
+
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
 		 cmd->tlvid, arg);
 
-	if (set_cfg(cmd->ifname, arg_path, (void *)&value, CONFIG_TYPE_BOOL))
+	if (set_cfg(cmd->ifname, cmd->type, arg_path, &value,
+		    CONFIG_TYPE_BOOL))
 		return cmd_failed;
 
-	somethingChangedLocal(cmd->ifname);
+	sprintf(obuf + strlen(obuf), "enableTx = %s\n", value ? "yes" : "no");
+	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
+}
+
+static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_tlvtxenable(cmd, arg, argvalue, obuf, obuf_len, false);
+}
+
+static int test_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_tlvtxenable(cmd, arg, argvalue, obuf, obuf_len, true);
 }
 
 struct arg_handlers *ieee8023_get_arg_handlers()

@@ -20,8 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
@@ -31,15 +30,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <asm/types.h>
 #include <asm/errno.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <linux/if.h>
-#include <linux/types.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <linux/dcbnl.h>
+
+typedef __u8 u8;
+typedef __u16 u16;
+typedef __u32 u32;
+typedef __u64 u64;
 
 #define BCN_ADDR_OPTION_LEN       8         /* 8 hex digits */
 #define ETH_ALEN      6

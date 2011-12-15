@@ -20,8 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
@@ -30,11 +29,13 @@
 
 #include "lldp.h"
 #include "lldp_mod.h"
+#include "lldp_tlv.h"
 
 #define LLDP_MOD_MED	OUI_TIA_TR41
 
 struct med_data {
 	char ifname[IFNAMSIZ];
+	enum agent_type agenttype;
 	struct unpacked_tlv *medcaps;
 	struct unpacked_tlv *netpoli;
 	struct unpacked_tlv *locid;
@@ -55,8 +56,8 @@ struct med_user_data {
 
 struct lldp_module *med_register(void);
 void med_unregister(struct lldp_module *mod);
-struct packed_tlv *med_gettlv(struct port *port);
-void med_ifdown(char *);
-void med_ifup(char *);
+struct packed_tlv *med_gettlv(struct port *, struct lldp_agent *);
+void med_ifdown(char *, struct lldp_agent *);
+void med_ifup(char *, struct lldp_agent *);
 
 #endif /* _LLDP_MED_H */

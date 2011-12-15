@@ -25,58 +25,61 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "includes.h"
 
-
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include "clif.h"
 #include "clif_msgs.h"
-#include "common.h"
-
 
 #if defined(CONFIG_CLIF_IFACE_UNIX) || defined(CONFIG_CLIF_IFACE_UDP)
 #define CLIF_IFACE_SOCKET
 #endif /* CONFIG_CLIF_IFACE_UNIX || CONFIG_CLIF_IFACE_UDP */
 
 
-struct clif  *clif_open(const char *clif_path)
+struct clif  *clif_open()
 {
 	struct clif *clif;
-	static int counter = 0;
+	socklen_t addrlen;
 
-	clif = os_malloc(sizeof(*clif));
+	clif = malloc(sizeof(*clif));
 	if (clif == NULL)
 		return NULL;
-	os_memset(clif, 0, sizeof(*clif));
+	memset(clif, 0, sizeof(*clif));
 
-	clif->s = socket(PF_UNIX, SOCK_DGRAM, 0);
+	clif->s = socket(AF_LOCAL, SOCK_DGRAM, 0);
 	if (clif->s < 0) {
-		os_free(clif);
+		perror("socket");
+		free(clif);
 		return NULL;
 	}
 
-	clif->local.sun_family = AF_UNIX;
-	os_snprintf(clif->local.sun_path, sizeof(clif->local.sun_path),
-		    "/tmp/lldpad_clif_%d-%d", getpid(), counter++);
-	if (bind(clif->s, (struct sockaddr *) &clif->local,
-		    sizeof(clif->local)) < 0) {
+	clif->local.sun_family = AF_LOCAL;
+	clif->local.sun_path[0] = '\0';
+	snprintf(&clif->local.sun_path[1], sizeof(clif->local.sun_path) - 1,
+		    "%s/%d", LLDP_CLIF_SOCK, getpid());
+	addrlen = sizeof(sa_family_t) + strlen(clif->local.sun_path + 1) + 1;
+	if (bind(clif->s, (struct sockaddr *) &clif->local, addrlen) < 0) {
 		close(clif->s);
-		os_free(clif);
+		free(clif);
 		return NULL;
 	}
 
-	clif->dest.sun_family = AF_UNIX;
-	os_snprintf(clif->dest.sun_path, sizeof(clif->dest.sun_path), "%s",
-		    clif_path);
-	if (connect(clif->s, (struct sockaddr *) &clif->dest,
-		    sizeof(clif->dest)) < 0) {
+	clif->dest.sun_family = AF_LOCAL;
+	clif->dest.sun_path[0] = '\0';
+	snprintf(&clif->dest.sun_path[1], sizeof(clif->dest.sun_path) - 1,
+		    "%s", LLDP_CLIF_SOCK);
+	addrlen = sizeof(sa_family_t) + strlen(clif->dest.sun_path + 1) + 1;
+
+	if (connect(clif->s, (struct sockaddr *) &clif->dest, addrlen) < 0) {
 		close(clif->s);
-		unlink(clif->local.sun_path);
-		os_free(clif);
+		free(clif);
 		return NULL;
 	}
 
@@ -85,9 +88,8 @@ struct clif  *clif_open(const char *clif_path)
 
 void clif_close(struct clif *clif)
 {
-	unlink(clif->local.sun_path);
 	close(clif->s);
-	os_free(clif);
+	free(clif);
 }
 
 
@@ -102,19 +104,13 @@ int clif_request(struct clif *clif, const char *cmd, size_t cmd_len,
 	int res;
 	fd_set rfds;
 	const char *_cmd;
-	char *cmd_buf = NULL;
 	size_t _cmd_len;
 
-	{
-		_cmd = cmd;
-		_cmd_len = cmd_len;
-	}
+	_cmd = cmd;
+	_cmd_len = cmd_len;
 
-	if (send(clif->s, _cmd, _cmd_len, 0) < 0) {
-		os_free(cmd_buf);
+	if (send(clif->s, _cmd, _cmd_len, 0) < 0)
 		return -1;
-	}
-	os_free(cmd_buf);
 
 	for (;;) {
 		tv.tv_sec = CMD_RESPONSE_TIMEOUT;
@@ -164,12 +160,18 @@ static int clif_attach_helper(struct clif *clif, char *tlvs_hex, int attach)
 	/* Allocate maximum buffer usage */
 	if (tlvs_hex && attach) {
 		buf = malloc(sizeof(char)*(strlen(tlvs_hex) + 1));
+		if (!buf)
+			return -1;
 		sprintf(buf, "%s%s","A",tlvs_hex);
 	} else if (attach) {
 		buf = malloc(sizeof(char) * 2);
+		if (!buf)
+			return -1;
 		sprintf(buf, "A");
 	} else {
 		buf = malloc(sizeof(char) * 2);
+		if (!buf)
+			return -1;
 		sprintf(buf, "D");
 	}
 		
@@ -177,7 +179,7 @@ static int clif_attach_helper(struct clif *clif, char *tlvs_hex, int attach)
 	free(buf);
 	if (ret < 0)
 		return ret;
-	if (len == 4 && os_memcmp(rbuf, "R00", 3) == 0)
+	if (len == 4 && memcmp(rbuf, "R00", 3) == 0)
 		return 0;
 	return -1;
 }

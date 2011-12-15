@@ -20,16 +20,17 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef PORTS_H
 #define PORTS_H
 
-#include "dcb_osdep.h"
-#include "mibdata.h"
+#include <sys/queue.h>
+#include <string.h>
+#include "lldp.h"
+#include "agent.h"
 
 #ifndef ETH_ALEN
 #define ETH_ALEN    6
@@ -49,73 +50,17 @@
 
 #define DEFAULT_TX_HOLD         4
 #define DEFAULT_TX_INTERVAL     30
-#define FASTSTART_TX_INTERVAL   1
-#define FASTSTART_TX_COUNT      5
+#define FAST_TX_INTERVAL        1
+#define TX_FAST_INIT            4
 #define DEFAULT_TX_DELAY        1
 #define FASTSTART_TX_DELAY      1
 #define REINIT_DELAY            2
+#define TX_CREDIT_MAX           5
 
 #define DORMANT_DELAY	15
 
 struct porttimers {
 	u16 dormantDelay;
-/* Tx */
-	u16 reinitDelay;
-	u16 msgTxHold;
-	u16 msgTxInterval;
-	u16 txDelay;
-	u16 txTTR;
-	u16 txShutdownWhile;
-	u16 txDelayWhile;
-/* Rx */
-	u16 tooManyNghbrsTimer;
-	u16 rxTTL;
-	u16 lastrxTTL;  /* cache last received */
-};
-
-struct porttx {
-	u8 *frameout;
-	u32 sizeout;
-	u8 state;
-	u8 localChange;
-	u16 txTTL;
-};
-
-struct portstats {
-/* Tx */
-	u32 statsFramesOutTotal;
-/* Rx */
-	u32 statsAgeoutsTotal;
-	u32 statsFramesDiscardedTotal;
-	u32 statsFramesInErrorsTotal;
-	u32 statsFramesInTotal;
-	u32 statsTLVsDiscardedTotal;
-	u32 statsTLVsUnrecognizedTotal;
-};
-
-typedef struct rxmanifest{
-	struct unpacked_tlv *chassis;
-	struct unpacked_tlv *portid;
-	struct unpacked_tlv *ttl;
-	struct unpacked_tlv *portdesc;
-	struct unpacked_tlv *sysname;
-	struct unpacked_tlv *sysdesc;
-	struct unpacked_tlv *syscap;
-	struct unpacked_tlv *mgmtadd;
-}rxmanifest;
-
-struct portrx {
-	u8 *framein;
-	u16 sizein;
-	u8 state;
-	u8 badFrame;
-	u8 rcvFrame;
-	u8 rxInfoAge;
-	u8 remoteChange;
-	u8 tooManyNghbrs;
-	u8 dupTlvs;
-	u8 dcbx_st;
-	rxmanifest *manifest;
 };
 
 struct eth_hdr {
@@ -124,62 +69,53 @@ struct eth_hdr {
 	u16 ethertype;
 };
 
-enum portAdminStatus {
-	disabled,
-	enabledTxOnly,
-	enabledRxOnly,
-	enabledRxTx,
+enum portEnableStatus {
+	no = 0,
+	yes,
 };
 
-struct porttlvs{
-	struct unpacked_tlv *cur_peer; /* Should be in manifest */
-	struct unpacked_tlv *last_peer;
-};
-
+/* lldp port specific structure */
 struct port {
 	char *ifname;
 	u8 hw_resetting;
 	u8 portEnabled;
 	u8 prevPortEnabled;
-	u8 adminStatus;
-	u8 rxChanges;
-	u16   lldpdu;
+	struct porttimers *timers;
+
+	u16 dormantDelay;
+
+	LIST_HEAD(agent_head, lldp_agent) agent_head;
 	struct l2_packet_data *l2;
-	struct portrx rx;
-	struct porttx tx;
-	struct porttlvs tlvs;
-	struct portstats stats;
-	struct porttimers timers;
-	struct msap msap;
+
 	struct port *next;
 };
 
 extern struct port *porthead;
-extern struct port *portcurrent;
-extern struct port *porttail;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-int add_port(const char *);
-int remove_port(const char *);
+struct port *add_port(const char *);
+int remove_port(char *);
 #ifdef __cplusplus
 }
 #endif
 int set_port_hw_resetting(const char *ifname, int resetting);
 int get_port_hw_resetting(const char *ifname);
-void set_lldp_port_enable_state(const char *ifname, int enable);
-void set_lldp_port_admin(const char *ifname, int enable);
+void set_lldp_port_enable(const char *ifname, int enable);
 
-int get_lldp_port_statistics(char *ifname, struct portstats *stats);
-
-int get_local_tlvs(char *ifname, unsigned char *tlvs, int *size);
-int get_neighbor_tlvs(char *ifname, unsigned char *tlvs, int *size);
+int get_local_tlvs(char *ifname, int type, unsigned char *tlvs, int *size);
+int get_neighbor_tlvs(char *ifname, int type, unsigned char *tlvs, int *size);
 
 int port_needs_shutdown(struct port *port);
 
 void set_port_operstate(const char *ifname, int operstate);
 int get_port_operstate(const char *ifname);
+
+void set_port_oper_delay(const char *ifname);
+
+int reinit_port(const char *ifname);
+void set_agent_oper_delay(const char *ifname, int type);
 
 static inline struct port *port_find_by_name(const char *ifname)
 {
@@ -192,4 +128,5 @@ static inline struct port *port_find_by_name(const char *ifname)
 	}
 	return NULL;
 }
+
 #endif /* PORTS_H */

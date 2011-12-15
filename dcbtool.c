@@ -25,13 +25,15 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "includes.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <signal.h>
 #include <dirent.h>
+#include <unistd.h>
 
 #include "clif.h"
 #include "lldp_dcbx_cmds.h"
@@ -108,8 +110,11 @@ static const char *commands_help =
 "  <gc|go> dcbx                 get configured or operational DCBX versions\n"
 "                               the configured version takes effect on next\n"
 "                               restart of the lldpad service\n"
-"  sc dcbx v:[12]               set the DCBX version to be used after next\n"
-"                               lldpad restart\n"
+"  sc dcbx v:cee                set the DCBX version to be used after next\n"
+"          v:cin                lldpad restart.  Version can be set to:\n"
+"          v:force-cin          cin: fall back to CIN DCBX if non-IEEE peer\n"
+"          v:force-cee          cee: fall back to CEE DCBX if non-IEEE peer\n"
+"                               force-cin, force-cee: do not start with IEEE DCBX\n"
 "Per Port Commands:\n"
 "  gc <ifname> <feature>        get configuration of <feature> on port <ifname>\n"
 "  go <ifname> <feature>        get operational status of <feature>\n"
@@ -125,6 +130,7 @@ static const char *commands_help =
 "     ll:<subtype>              logical link status\n\n"
 "  'subtype' can be:\n"
 "     [0|fcoe]                  FCoE\n\n"
+"     [1|iscsi]                 iSCSI\n\n"
 "  'args' can include:\n"
 "     [e:<0|1>]                 controls feature enable\n"
 "     [a:<0|1>]                 controls feature advertise via DCBX\n"
@@ -181,8 +187,6 @@ static const char *commands_help =
 static struct clif *clif_conn;
 static int cli_quit = 0;
 static int cli_attached = 0;
-static const char *clif_iface_dir = CLIF_IFACE_DIR;
-static char *clif_ifname = NULL;
 
 
 static void usage(void)
@@ -244,26 +248,6 @@ int parse_print_message(char *msg, int print)
 
 	return status;
 }
-
-static struct clif *cli_open_connection(const char *ifname)
-{
-	char *cfile;
-	int flen;
-
-	if (ifname == NULL)
-		return NULL;
-
-	flen = strlen(clif_iface_dir) + strlen(ifname) + 2;
-	cfile = malloc(flen);
-	if (cfile == NULL)
-		return NULL;
-	snprintf(cfile, flen, "%s/%s", clif_iface_dir, ifname);
-
-	clif_conn = clif_open(cfile);
-	free(cfile);
-	return clif_conn;
-}
-
 
 static void cli_close_connection(void)
 {
@@ -354,56 +338,6 @@ static int cli_cmd_quit(struct clif *clif, int argc, char *argv[], int raw)
 }
 
 
-static void cli_list_interfaces(struct clif *clif)
-{
-	struct dirent *dent;
-	DIR *dir;
-
-	dir = opendir(clif_iface_dir);
-	if (dir == NULL) {
-		printf("Control interface directory '%s' could not be "
-		       "opened.\n", clif_iface_dir);
-		return;
-	}
-
-	printf("Available interfaces:\n");
-	while ((dent = readdir(dir))) {
-		if (strcmp(dent->d_name, ".") == 0 ||
-		    strcmp(dent->d_name, "..") == 0)
-			continue;
-		printf("%s\n", dent->d_name);
-	}
-	closedir(dir);
-}
-
-
-static int cli_cmd_interface(struct clif *clif, int argc,
-				     char *argv[], int raw)
-{
-	if (argc < 1) {
-		cli_list_interfaces(clif);
-		return 0;
-	}
-
-	cli_close_connection();
-	free(clif_ifname);
-	clif_ifname = strdup(argv[0]);
-
-	if (cli_open_connection(clif_ifname)) {
-		printf("Connected to interface '%s.\n", clif_ifname);
-		if (clif_attach(clif_conn, NULL) == 0)
-			cli_attached = 1;
-		else
-			printf("Warning: Failed to attach to lldpad.\n");
-	} else {
-		printf(
-		     "Could not connect to lldpad interface '%s' - re-trying\n",
-			clif_ifname);
-	}
-	return 0;
-}
-
-
 struct cli_cmd {
 	const char *cmd;
 	int (*handler)(struct clif *clif, int argc, char *argv[], int raw);
@@ -412,7 +346,6 @@ struct cli_cmd {
 static struct cli_cmd cli_commands[] = {
 	{ "ping", cli_cmd_ping },
 	{ "help", cli_cmd_help },
-	{ "interface", cli_cmd_interface },
 	{ "license", cli_cmd_license },
 	{ "quit", cli_cmd_quit },
 	{ NULL, NULL }
@@ -485,6 +418,7 @@ static void cli_interactive(int raw)
 	char cmd[256], *res, *argv[max_args], *pos;
 	int argc;
 
+	setlinebuf(stdout);
 	printf("\nInteractive mode\n\n");
 
 	do {
@@ -539,7 +473,7 @@ static void cli_alarm(int sig)
 		cli_close_connection();
 	}
 	if (!clif_conn) {
-		clif_conn = cli_open_connection(clif_ifname);
+		clif_conn = clif_open();
 		if (clif_conn) {
 			printf("Connection to lldpad re-established\n");
 			if (clif_attach(clif_conn, NULL) == 0)
@@ -603,21 +537,7 @@ int main(int argc, char *argv[])
 	}
 
 	for (;;) {
-		if (clif_ifname == NULL) {
-			struct dirent *dent;
-			DIR *dir = opendir(clif_iface_dir);
-			if (dir) {
-				while ((dent = readdir(dir))) {
-					if (strcmp(dent->d_name, ".") == 0 ||
-					    strcmp(dent->d_name, "..") == 0)
-						continue;
-					clif_ifname = strdup(dent->d_name);
-					break;
-				}
-				closedir(dir);
-			}
-		}
-		clif_conn = cli_open_connection(clif_ifname);
+		clif_conn = clif_open();
 		if (clif_conn) {
 			if (warning_displayed)
 				printf("Connection established.\n");
@@ -650,7 +570,6 @@ int main(int argc, char *argv[])
 	} else
 		ret = request(clif_conn, argc - optind, &argv[optind], raw);
 
-	free(clif_ifname);
 	cli_close_connection();
 	return ret;
 }

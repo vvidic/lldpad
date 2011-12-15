@@ -20,17 +20,24 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef _LLDP_UTIL_H
 #define _LLDP_UTIL_H
 
+#include "lldp.h"
 #include "lldp/ports.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #define ETHTOOL_GLINK  0x0000000a    /* Get link status (ethtool_value) */
+
+#define max(x,y)  ((x>y)?(x):(y))
+
+int hexstr2bin(const char *hex, u8 *buf, size_t len);
+int bin2hexstr(const u8 *hex, size_t hexlen, char *buf, size_t buflen);
 
 int is_valid_lldp_device(const char *ifname);
 int is_active(const char *ifname);
@@ -40,6 +47,7 @@ int is_bridge(const char *ifname);
 int is_vlan(const char *ifname);
 int is_vlan_capable(const char *ifname);
 int is_wlan(const char *ifname);
+int is_macvtap(const char *ifname);
 int is_valid_mac(const u8 *mac);
 int is_san_mac(u8 *addr);
 int is_ether(const char *ifname);
@@ -76,6 +84,10 @@ int get_ifidx(const char *ifname);
 int get_master(const char *ifname);
 int get_addr(const char *ifname, int domain, void *buf);
 int check_link_status(const char *ifname);
+
+int get_arg_val_list(char *ibuf, int ilen, int *ioff,
+			    char **args, char **argvals);
+int get_arg_list(char *ibuf, int ilen, int *ioff, char **args);
 
 #define ntohll(x) be64_to_cpu(x)
 #define htonll(x) cpu_to_be64(x)

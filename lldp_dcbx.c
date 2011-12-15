@@ -20,12 +20,19 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdlib.h>
+#include <assert.h>
+#include <sys/socket.h>
+#include "linux/if.h"
+#include "include/linux/dcbnl.h"
 #include "lldp.h"
+#include "lldp/ports.h"
+#include "lldp/states.h"
+#include "dcb_types.h"
 #include "lldp_dcbx.h"
 #include "dcb_protocol.h"
 #include "tlv_dcbx.h"
@@ -36,22 +43,24 @@
 #include "clif_msgs.h"
 #include "lldp_mod.h"
 #include "lldp_mand_clif.h"
-#include "lldp/ports.h"
-#include "lldp/states.h"
-#include "drv_cfg.h"
+#include "lldp_dcbx_nl.h"
 #include "lldp_dcbx_cfg.h"
 #include "lldp_dcbx_cmds.h"
+#include "lldp_8021qaz.h"
 #include "lldp_rtnl.h"
-#include <linux/if.h>
+#include "lldp_tlv.h"
+#include "lldp_rtnl.h"
+#include "lldpad_shm.h"
+#include "dcb_driver_interface.h"
 
 extern u8 gdcbx_subtype;
 
 void dcbx_free_tlv(struct dcbx_tlvs *tlvs);
-static int dcbx_check_operstate(struct port *port);
+static int dcbx_check_operstate(struct port *port, struct lldp_agent *agent);
 
 const struct lldp_mod_ops dcbx_ops = {
-	.lldp_mod_register 	= dcbx_register,
-	.lldp_mod_unregister 	= dcbx_unregister,
+	.lldp_mod_register	= dcbx_register,
+	.lldp_mod_unregister	= dcbx_unregister,
 	.lldp_mod_gettlv	= dcbx_gettlv,
 	.lldp_mod_rchange	= dcbx_rchange,
 	.lldp_mod_ifup		= dcbx_ifup,
@@ -62,7 +71,7 @@ const struct lldp_mod_ops dcbx_ops = {
 	.timer			= dcbx_check_operstate,
 };
 
-static int dcbx_check_operstate(struct port *port)
+static int dcbx_check_operstate(struct port *port, struct lldp_agent *agent)
 {
 	int err;
 	u8 app_good = 0;
@@ -70,12 +79,12 @@ static int dcbx_check_operstate(struct port *port)
 	app_attribs app_data;
 	pfc_attribs pfc_data;
 
-	if (!port->portEnabled || !port->timers.dormantDelay)
+	if (agent->type != NEAREST_BRIDGE)
 		return 0;
 
-	port->timers.dormantDelay--;
+	if (!port->portEnabled || !port->dormantDelay)
+		return 0;
 
-	init_cfg();
 	err = get_app(port->ifname, 0, &app_data);
 	if (err)
 		goto err_out;
@@ -90,12 +99,12 @@ static int dcbx_check_operstate(struct port *port)
 	    !app_data.protocol.Enable)
 		app_good = 1;
 
-	if ((pfc_good && app_good) || port->timers.dormantDelay == 1) {
-		printf("%s: %s: IF_OPER_UP delay, %u pfc oper %u app oper %u\n",
-			__func__, port->ifname, port->timers.dormantDelay,
+	if ((pfc_good && app_good) || port->dormantDelay == 1) {
+		LLDPAD_DBG("%s: %s: IF_OPER_UP delay, %u pfc oper %u"
+			   "app oper %u\n",
+			__func__, port->ifname, port->dormantDelay,
 			pfc_data.protocol.OperMode,
 			app_data.protocol.OperMode);
-		port->timers.dormantDelay = 0;
 		set_operstate(port->ifname, IF_OPER_UP);
 	}
 
@@ -110,54 +119,97 @@ struct dcbx_tlvs *dcbx_data(const char *ifname)
 	struct dcbd_user_data *dud;
 	struct dcbx_tlvs *tlv = NULL;
 
-	dud = find_module_user_data_by_if(ifname, &lldp_head, LLDP_MOD_DCBX);
+	dud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_DCBX);
 	if (dud) {
 		LIST_FOREACH(tlv, &dud->head, entry) {
 			if (!strncmp(tlv->ifname, ifname, IFNAMSIZ))
 				return tlv;
 		}
 	}
-	
+
 	return NULL;
 }
 
-int dcbx_bld_tlv(struct port *newport)
+int dcbx_tlvs_rxed(const char *ifname, struct lldp_agent *agent)
+{
+	struct dcbd_user_data *dud;
+	struct dcbx_tlvs *tlv = NULL;
+
+	if (agent->type != NEAREST_BRIDGE)
+		return 0;
+
+	dud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_DCBX);
+	if (dud) {
+		LIST_FOREACH(tlv, &dud->head, entry) {
+			if (!strncmp(tlv->ifname, ifname, IFNAMSIZ))
+				return tlv->rxed_tlvs;
+		}
+	}
+
+	return 0;
+}
+
+int dcbx_get_legacy_version(const char *ifname)
+{
+	if (lldpad_shm_get_dcbx(ifname))
+		return gdcbx_subtype | DCBX_FORCE_BIT;
+	else
+		return gdcbx_subtype;
+}
+
+int dcbx_check_active(const char *ifname)
+{
+	struct dcbd_user_data *dud;
+	struct dcbx_tlvs *tlv = NULL;
+
+	dud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_DCBX);
+	if (dud) {
+		LIST_FOREACH(tlv, &dud->head, entry) {
+			if (!strncmp(tlv->ifname, ifname, IFNAMSIZ))
+				return tlv->active;
+		}
+	}
+
+	return 0;
+}
+
+int dcbx_bld_tlv(struct port *newport, struct lldp_agent *agent)
 {
 	bool success;
 	struct dcbx_tlvs *tlvs;
 	int enabletx;
-	long adminstatus = disabled;
+	int adminstatus = disabled;
+
+	if (agent->type != NEAREST_BRIDGE)
+		return 0;
 
 	tlvs = dcbx_data(newport->ifname);
 
-	if (!init_cfg())
-		return -1;
+	get_config_setting(newport->ifname, agent->type, ARG_ADMINSTATUS,
+			  &adminstatus, CONFIG_TYPE_INT);
 
-	get_config_setting(newport->ifname, ARG_ADMINSTATUS,
-			  (void *)&adminstatus, CONFIG_TYPE_INT);
+	enabletx = is_tlv_txenabled(newport->ifname, agent->type,
+				    (OUI_CEE_DCBX << 8) | tlvs->dcbx_st);
 
-	enabletx = is_tlv_txenabled(newport->ifname, (OUI_CEE_DCBX << 8) |
-				  tlvs->dcbx_st);
-
-	if (!enabletx || adminstatus != enabledRxTx)
+	if (!tlvs->active || !enabletx || adminstatus != enabledRxTx)
 		return 0;
 
 	tlvs->control = bld_dcbx_ctrl_tlv(tlvs);
 	if (tlvs->control == NULL) {
-		printf("add_port:  bld_dcbx_ctrl_tlv failed\n");
+		LLDPAD_INFO("add_port:  bld_dcbx_ctrl_tlv failed\n");
 		goto fail_add;
 	}
 
 	if (tlvs->dcbx_st == dcbx_subtype2) {
 		tlvs->pg2 = bld_dcbx2_pg_tlv(tlvs, &success);
 		if (!success) {
-			printf("bld_dcbx2_pg_tlv: failed\n");
+			LLDPAD_INFO("bld_dcbx2_pg_tlv: failed\n");
 			goto fail_add;
 		}
 	} else {
 		tlvs->pg1 = bld_dcbx1_pg_tlv(tlvs, &success);
 		if (!success) {
-			printf("bld_dcbx1_pg_tlv: failed\n");
+			LLDPAD_INFO("bld_dcbx1_pg_tlv: failed\n");
 			goto fail_add;
 		}
 	}
@@ -165,29 +217,27 @@ int dcbx_bld_tlv(struct port *newport)
 	if (tlvs->dcbx_st == dcbx_subtype2) {
 		tlvs->pfc2 = bld_dcbx2_pfc_tlv(tlvs, &success);
 		if (!success) {
-			printf("bld_dcbx2_pfc_tlv: failed\n");
+			LLDPAD_INFO("bld_dcbx2_pfc_tlv: failed\n");
 			goto fail_add;
 		}
 	} else {
 		tlvs->pfc1 = bld_dcbx1_pfc_tlv(tlvs, &success);
 		if (!success) {
-			printf("bld_dcbx1_pfc_tlv: failed\n");
+			LLDPAD_INFO("bld_dcbx1_pfc_tlv: failed\n");
 			goto fail_add;
 		}
 	}
 
 	if (tlvs->dcbx_st == dcbx_subtype2) {
-		tlvs->app2 = bld_dcbx2_app_tlv(tlvs,
-			APP_FCOE_STYPE, &success);
+		tlvs->app2 = bld_dcbx2_app_tlv(tlvs, 0, &success);
 		if (!success) {
-			printf("bld_dcbx2_app_tlv: failed\n");
+			LLDPAD_INFO("bld_dcbx2_app_tlv: failed\n");
 			goto fail_add;
 		}
 	} else {
-		tlvs->app1 = bld_dcbx1_app_tlv(tlvs,
-				APP_FCOE_STYPE, &success);
+		tlvs->app1 = bld_dcbx1_app_tlv(tlvs, 0, &success);
 		if (!success) {
-			printf("bld_dcbx1_app_tlv: failed\n");
+			LLDPAD_INFO("bld_dcbx1_app_tlv: failed\n");
 			goto fail_add;
 		}
 	}
@@ -195,20 +245,20 @@ int dcbx_bld_tlv(struct port *newport)
 	tlvs->llink = bld_dcbx_llink_tlv(tlvs, LLINK_FCOE_STYPE,
 						&success);
 	if (!success) {
-		printf("bld_dcbx_llink_tlv: failed\n");
+		LLDPAD_INFO("bld_dcbx_llink_tlv: failed\n");
 		goto fail_add;
 	}
 
 	if (tlvs->dcbx_st == dcbx_subtype2) {
 		tlvs->dcbx2 = bld_dcbx2_tlv(tlvs);
 		if (tlvs->dcbx2 == NULL) {
-			printf("add_port:  bld_dcbx2_tlv failed\n");
+			LLDPAD_INFO("add_port:  bld_dcbx2_tlv failed\n");
 			goto fail_add;
 		}
 	} else {
 		tlvs->dcbx1 = bld_dcbx1_tlv(tlvs);
 		if (tlvs->dcbx1 == NULL) {
-			printf("add_port:  bld_dcbx1_tlv failed\n");
+			LLDPAD_INFO("add_port:  bld_dcbx1_tlv failed\n");
 			goto fail_add;
 		}
 	}
@@ -221,7 +271,7 @@ void dcbx_free_manifest(struct dcbx_manifest *manifest)
 {
 	if (!manifest)
 		return;
-	
+
 	if (manifest->dcbx1)
 		manifest->dcbx1 = free_unpkd_tlv(manifest->dcbx1);
 	if (manifest->dcbx2)
@@ -269,10 +319,9 @@ void dcbx_free_tlv(struct dcbx_tlvs *tlvs)
 		tlvs->app1 = free_unpkd_tlv(tlvs->app1);
 	}
 
-	if (tlvs->app2 != NULL) {
+	if (tlvs->app2 != NULL)
 		tlvs->app2 = free_unpkd_tlv(tlvs->app2);
-	}
-	
+
 	if (tlvs->llink != NULL) {
 		tlvs->llink = free_unpkd_tlv(tlvs->llink);
 	}
@@ -287,22 +336,24 @@ void dcbx_free_tlv(struct dcbx_tlvs *tlvs)
 	return;
 }
 
-struct packed_tlv* dcbx_gettlv(struct port *port)
+struct packed_tlv* dcbx_gettlv(struct port *port, struct lldp_agent *agent)
 {
 	struct packed_tlv *ptlv = NULL;
 	struct dcbx_tlvs *tlvs;
+
+	if (agent->type != NEAREST_BRIDGE)
+		return NULL;
 
         if (!check_port_dcb_mode(port->ifname))
 		return NULL;
 
 	tlvs = dcbx_data(port->ifname);
-
-	dcbx_free_tlv(tlvs);
 	if (!tlvs)
 		return NULL;
 
-	dcbx_bld_tlv(port);
+	dcbx_free_tlv(tlvs);
 
+	dcbx_bld_tlv(port, agent);
 	if (tlvs->dcbx_st == dcbx_subtype2) {
 		/* Load Type127 - dcbx subtype 2*/
 		if (tlv_ok(tlvs->dcbx2))
@@ -367,45 +418,41 @@ struct lldp_module * dcbx_register(void)
 
 	/* store pg defaults */
 	if (!add_pg_defaults()) {
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "failed to add default PG data");
+		LLDPAD_INFO("failed to add default PG data");
 		goto out_err;
 	}
 
 	/* store pg defaults */
 	if (!add_pfc_defaults()) {
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "failed to add default PFC data");
+		LLDPAD_INFO("failed to add default PFC data");
 		goto out_err;
 	}
 
 	/* store app defaults */
 	for (i = 0; i < DCB_MAX_APPTLV; i++) {
 		if (!add_app_defaults(i)) {
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s:%d", "failed to add default APP data", i);
+			LLDPAD_INFO("failed to add default APP data %d", i);
 			goto out_err;
 		}
 	}
 
 
-	for (i = 0; i < DCB_MAX_APPTLV; i++) {
+	for (i = 0; i < DCB_MAX_LLKTLV; i++) {
 		if (!add_llink_defaults(i)) {
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s:%d", "failed to add default APP data", i);
+			LLDPAD_INFO("failed to add default APP data %i", i);
 			goto out_err;
 		}
 	}
 
 	if (!init_drv_if()) {
-		TRACE("Error creataing netlink socket for driver i/f.\n");
+		LLDPAD_WARN("Error creataing netlink socket for driver i/f.\n");
 		goto out_err;
 	}
 
-	LLDPAD_DBG("%s:done\n", __func__);
+	LLDPAD_DBG("%s: dcbx register done\n", __func__);
 	return mod;
 out_err:
-	LLDPAD_DBG("%s:failed\n", __func__);
+	LLDPAD_DBG("%s: dcbx register failed\n", __func__);
 	return NULL;
 }
 
@@ -413,95 +460,103 @@ out_err:
 void dcbx_unregister(struct lldp_module *mod)
 {
 	dcbx_remove_all();
+	deinit_drv_if();
 	if (mod->data) {
 		dcbx_free_data((struct dcbd_user_data *) mod->data);
 		free(mod->data);
 	}
 	free(mod);
-	LLDPAD_DBG("%s:done\n", __func__);
+	LLDPAD_DBG("%s: unregister dcbx complete.\n", __func__);
 }
 
-void dcbx_ifup(char *ifname)
+void dcbx_ifup(char *ifname, struct lldp_agent *agent)
 {
 	struct port *port = NULL;
 	struct dcbx_tlvs *tlvs;
 	struct dcbd_user_data *dud;
 	struct dcbx_manifest *manifest;
-	int dcb_enable;
-	long adminstatus;
-	long enabletx;
+	feature_support dcb_support;
+	int dcb_enable, exists;
+	int adminstatus;
+	int enabletx;
 	char arg_path[256];
 
 	/* dcb does not support bonded devices */
 	if (is_bond(ifname) || is_vlan(ifname))
 		return;
 
-	if (!init_cfg())
+	if (agent->type != NEAREST_BRIDGE)
 		return;
 
-	if (!get_dcb_enable_state(ifname, &dcb_enable))
-		set_hw_state(ifname, dcb_enable);
+	port = port_find_by_name(ifname);
 
-	port = porthead;
-	while (port != NULL) {
-		if (!strncmp(ifname, port->ifname, MAX_DEVICE_NAME_LEN))
-			break;
-		port = port->next;
-	}
+	dud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_DCBX);
+	tlvs = dcbx_data(ifname);
 
-	dud = find_module_user_data_by_if(ifname, &lldp_head, LLDP_MOD_DCBX);
-	tlvs = dcbx_data(ifname);	
+	if (!port)
+		return;
+	else if (tlvs)
+		goto initialized;
 
-	if (!port || !check_port_dcb_mode(ifname)) 
+	/* Abort initialization on hardware that does not support
+	 * querying the DCB state. We assume this means the driver
+	 * does not support DCB.
+	 */
+	if (get_hw_state(ifname, &dcb_enable) < 0)
+		return;
+
+	/* Abort initialization on hardware  where DCBX negotiation
+	 * is not performed by the host LLDP agent.
+	 */
+	get_dcb_capabilities(ifname, &dcb_support);
+	if (dcb_support.dcbx && !(dcb_support.dcbx & DCB_CAP_DCBX_HOST))
 		return;
 
 	/* if no adminStatus setting or wrong setting for adminStatus,
 	 * then set adminStatus to enabledRxTx.
 	 */
-	if (get_config_setting(ifname, ARG_ADMINSTATUS, (void *)&adminstatus,
-				CONFIG_TYPE_INT) ||
+	if (get_config_setting(ifname, agent->type, ARG_ADMINSTATUS,
+			       &adminstatus, CONFIG_TYPE_INT) ||
 				adminstatus == enabledTxOnly ||
 				adminstatus == enabledRxOnly) {
 
 		/* set enableTx to true if it is not already set */
 		snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
 			(OUI_CEE_DCBX << 8) | 1, ARG_TLVTXENABLE);
-		if (get_config_setting(ifname, arg_path,
-				(void *)&enabletx, CONFIG_TYPE_BOOL)) {
+		if (get_config_setting(ifname, agent->type, arg_path,
+				       &enabletx, CONFIG_TYPE_BOOL)) {
 			enabletx = true;
-			set_config_setting(ifname, arg_path,
-			              (void *)&enabletx, CONFIG_TYPE_BOOL);
+			set_config_setting(ifname, agent->type, arg_path,
+					   &enabletx, CONFIG_TYPE_BOOL);
 		}
 
 		snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
 			(OUI_CEE_DCBX << 8) | 2, ARG_TLVTXENABLE);
-		if (get_config_setting(ifname, arg_path,
-				(void *)&enabletx, CONFIG_TYPE_BOOL)) {
+		if (get_config_setting(ifname, agent->type, arg_path,
+				       &enabletx, CONFIG_TYPE_BOOL)) {
 			enabletx = true;
-			set_config_setting(ifname, arg_path,
-			              (void *)&enabletx, CONFIG_TYPE_BOOL);
+			set_config_setting(ifname, agent->type, arg_path,
+					   &enabletx, CONFIG_TYPE_BOOL);
 		}
 
 		adminstatus = enabledRxTx;
-		if (set_config_setting(ifname, ARG_ADMINSTATUS,
-			              (void *)&adminstatus, CONFIG_TYPE_INT) ==
+		if (set_config_setting(ifname, agent->type, ARG_ADMINSTATUS,
+				       &adminstatus, CONFIG_TYPE_INT) ==
 				       cmd_success)
-			set_lldp_port_admin(ifname, (int)adminstatus);
+			set_lldp_agent_admin(ifname, agent->type, adminstatus);
 	}
 
 	tlvs = malloc(sizeof(*tlvs));
 	if (!tlvs) {
-		LLDPAD_DBG("%s: ifname %s malloc failed.\n",
-				__func__, ifname);
+		LLDPAD_DBG("%s: ifname %s malloc failed.\n", __func__, ifname);
 		return;
 	}
 	memset(tlvs, 0, sizeof(*tlvs));
-		
+
 	manifest = malloc(sizeof(*manifest));
 	if (!manifest) {
 		free(tlvs);
-		LLDPAD_DBG("%s: %s malloc failure\n",
-				__func__, ifname);
+		LLDPAD_DBG("%s: %s malloc failure\n", __func__, ifname);
 		return;
 	}
 	memset(manifest, 0, sizeof(*manifest));
@@ -510,22 +565,57 @@ void dcbx_ifup(char *ifname)
 	strncpy(tlvs->ifname, ifname, IFNAMSIZ);
 	tlvs->port = port;
 	tlvs->dcbdu = 0;
-	tlvs->dcbx_st = gdcbx_subtype;
-	LIST_INSERT_HEAD(&dud->head, tlvs, entry);		
+	tlvs->dcbx_st = gdcbx_subtype & MASK_DCBX_FORCE;
+	LIST_INSERT_HEAD(&dud->head, tlvs, entry);
 
+initialized:
 	dcbx_add_adapter(ifname);
+
 	/* ensure advertise bits are set consistently with enabletx */
-	enabletx = is_tlv_txenabled(ifname, (OUI_CEE_DCBX << 8) |
-				    tlvs->dcbx_st);
-	if (!enabletx)
-		dont_advertise_dcbx_all(ifname);
-	dcbx_bld_tlv(port);
+	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
+		 (OUI_CEE_DCBX << 8) | tlvs->dcbx_st, ARG_TLVTXENABLE);
+	exists = get_config_setting(ifname, agent->type, arg_path,
+				    &enabletx, CONFIG_TYPE_BOOL);
+
+	if (!exists || enabletx)
+		dont_advertise_dcbx_all(ifname, 1);
+
+	dcbx_bld_tlv(port, agent);
+
+	/* if the dcbx field is not filled in by the capabilities
+	 * query, then the kernel is older and does not support
+	 * IEEE mode, so make CEE DCBX active by default. Unless
+	 * the dcb state has been disabled from command line.
+	 */
+	get_dcb_capabilities(ifname, &dcb_support);
+
+	exists = get_dcb_enable_state(ifname, &dcb_enable);
+
+	if ((exists < 0 || dcb_enable) &&
+	    (!dcb_support.dcbx || (gdcbx_subtype & ~MASK_DCBX_FORCE) ||
+	    (lldpad_shm_get_dcbx(ifname)))) {
+		set_dcbx_mode(tlvs->ifname,
+			      DCB_CAP_DCBX_HOST | DCB_CAP_DCBX_VER_CEE);
+		set_hw_state(ifname, 1);
+		lldpad_shm_set_dcbx(ifname, gdcbx_subtype);
+		tlvs->active = true;
+	} else {
+		tlvs->active = false;
+	}
+
+	if (tlvs->active && (get_operstate(ifname) == IF_OPER_UP))
+		set_hw_all(ifname);
+
+	return;
 }
 
-void dcbx_ifdown(char *device_name)
+void dcbx_ifdown(char *device_name, struct lldp_agent *agent)
 {
 	struct port *port = NULL;
 	struct dcbx_tlvs *tlvs;
+
+	if (agent->type != NEAREST_BRIDGE)
+		return;
 
 	/* dcb does not support bonded devices */
 	if (is_bond(device_name))
@@ -539,6 +629,9 @@ void dcbx_ifdown(char *device_name)
 	}
 
 	tlvs = dcbx_data(device_name);
+
+	if (!tlvs)
+		return;
 
 	/* remove dcb port */
 	if (check_port_dcb_mode(device_name)) {
@@ -591,28 +684,33 @@ void clear_dcbx_manifest(struct dcbx_tlvs *dcbx)
  * TLV not consumed on error otherwise it is either free'd or stored
  * internally in the module.
  */
-int dcbx_rchange(struct port *port,  struct unpacked_tlv *tlv)
+int dcbx_rchange(struct port *port, struct lldp_agent *agent, struct unpacked_tlv *tlv)
 {
 	u8 oui[DCB_OUI_LEN] = INIT_DCB_OUI;
 	struct dcbx_tlvs *dcbx;
 	struct dcbx_manifest *manifest;
+	int res;
+
+	if (agent == NULL || agent->type != NEAREST_BRIDGE)
+		return SUBTYPE_INVALID;
 
 	dcbx = dcbx_data(port->ifname);
 
 	if (!dcbx)
 		return SUBTYPE_INVALID;
 
-	/* 
- 	 * TYPE_1 is _mandatory_ and will always be before the 
- 	 * DCBX TLV so we can use it to mark the begining of a
- 	 * pdu for dcbx to verify only a single DCBX TLV is 
- 	 * present
- 	 */ 
+	/*
+	 * TYPE_1 is _mandatory_ and will always be before the
+	 * DCBX TLV so we can use it to mark the begining of a
+	 * pdu for dcbx to verify only a single DCBX TLV is
+	 * present
+	 */
 	if (tlv->type == TYPE_1) {
 		manifest = malloc(sizeof(*manifest));
 		memset(manifest, 0, sizeof(*manifest));
 		dcbx->manifest = manifest;
 		dcbx->dcbdu = 0;
+		dcbx->rxed_tlvs = false;
 	}
 
 	if (tlv->type == TYPE_127) {
@@ -620,35 +718,34 @@ int dcbx_rchange(struct port *port,  struct unpacked_tlv *tlv)
 			return TLV_ERR;
 		}
 
-		/* expect oui_st to match tlv_info. */
-		if ((memcmp(tlv->info, &oui, DCB_OUI_LEN) != 0)) {
-			assert(port->tlvs.cur_peer == NULL);
-			/* not a DCBX TLV */
+		/* Match DCB OUI */
+		if ((memcmp(tlv->info, &oui, DCB_OUI_LEN) != 0))
 			return SUBTYPE_INVALID;
-		}
 
 		if (dcbx->dcbx_st == dcbx_subtype2) {
 			if ((tlv->info[DCB_OUI_LEN] == dcbx_subtype2)
-				&& (port->lldpdu & RCVD_LLDP_DCBX2_TLV)){
-				printf("Received duplicate DCBX TLVs in "
-					"this LLDPDU\n");
+				&& (agent->lldpdu & RCVD_LLDP_DCBX2_TLV)){
+				LLDPAD_INFO("Received duplicate DCBX TLVs\n");
 				return TLV_ERR;
 			}
 		}
 		if ((tlv->info[DCB_OUI_LEN] == dcbx_subtype1)
-			&& (port->lldpdu & RCVD_LLDP_DCBX1_TLV)) {
-			printf("Received duplicate DCBX TLVs in "
-				"this LLDPDU\n");
+			&& (agent->lldpdu & RCVD_LLDP_DCBX1_TLV)) {
+			LLDPAD_INFO("Received duplicate DCBX TLVs\n");
 			return TLV_ERR;
 		}
 
 		if ((dcbx->dcbx_st == dcbx_subtype2) &&
 			(tlv->info[DCB_OUI_LEN] == dcbx_subtype2)) {
-			port->lldpdu |= RCVD_LLDP_DCBX2_TLV;
+			agent->lldpdu |= RCVD_LLDP_DCBX2_TLV;
 			dcbx->manifest->dcbx2 = tlv;
+			dcbx->rxed_tlvs = true;
+			return TLV_OK;
 		} else if (tlv->info[DCB_OUI_LEN] == dcbx_subtype1) {
-			port->lldpdu |= RCVD_LLDP_DCBX1_TLV;
+			agent->lldpdu |= RCVD_LLDP_DCBX1_TLV;
 			dcbx->manifest->dcbx1 = tlv;
+			dcbx->rxed_tlvs = true;
+			return TLV_OK;
 		} else {
 			/* not a DCBX subtype we support */
 			return SUBTYPE_INVALID;
@@ -656,45 +753,55 @@ int dcbx_rchange(struct port *port,  struct unpacked_tlv *tlv)
 	}
 
 	if (tlv->type == TYPE_0) {
-		/*  unpack highest dcbx subtype first, to allow lower
-		 *  subtype to store tlvs if higher was not present
+		int enabled;
+		int exists = get_dcb_enable_state(dcbx->ifname, &enabled);
+
+		if (!dcbx->active && !ieee8021qaz_tlvs_rxed(dcbx->ifname) &&
+		    dcbx->rxed_tlvs &&
+		    (exists < 0 || enabled)) {
+			LLDPAD_DBG("CEE DCBX %s going ACTIVE\n", dcbx->ifname);
+			set_dcbx_mode(port->ifname,
+				      DCB_CAP_DCBX_HOST | DCB_CAP_DCBX_VER_CEE);
+			set_hw_state(port->ifname, 1);
+			lldpad_shm_set_dcbx(dcbx->ifname, gdcbx_subtype);
+			dcbx->active = true;
+			somethingChangedLocal(port->ifname, agent->type);
+		}
+
+		/* Only process DCBXv2 or DCBXv1 but not both this
+		 * is required because processing both could be
+		 * problamatic. Specifically if the DCB attributes do
+		 * not match across versions.
 		 */
-		if ((dcbx->dcbx_st == dcbx_subtype2) &&
-			 dcbx->manifest->dcbx2) {
-			 load_peer_tlvs(port, dcbx->manifest->dcbx2,
-				CURRENT_PEER);
-			if (unpack_dcbx2_tlvs(port,
-				dcbx->manifest->dcbx2) == false) {
-				printf("Error unpacking the DCBX2"
+		if (dcbx->manifest->dcbx2) {
+			res = unpack_dcbx2_tlvs(port, agent, dcbx->manifest->dcbx2);
+			if (!res) {
+				LLDPAD_DBG("Error unpacking the DCBX2"
 					"TLVs - Discarding LLDPDU\n");
 				return TLV_ERR;
 			}
-		}
-		if (dcbx->manifest->dcbx1) {
-			if (!dcbx->manifest->dcbx2)
-				load_peer_tlvs(port,
-					dcbx->manifest->dcbx1,
-					CURRENT_PEER);
-			if (unpack_dcbx1_tlvs(port,
-				dcbx->manifest->dcbx1) == false) {
-				printf("Error unpacking the DCBX1"
+			mibUpdateObjects(port, agent);
+		} else if (dcbx->manifest->dcbx1) {
+			res = unpack_dcbx1_tlvs(port, agent, dcbx->manifest->dcbx1);
+			if (!res) {
+				LLDPAD_DBG("Error unpacking the DCBX1"
 					"TLVs - Discarding LLDPDU\n");
 				return TLV_ERR;
 			}
+			mibUpdateObjects(port, agent);
 		}
-		if (port->tlvs.cur_peer) {
-			process_dcbx_tlv(port, port->tlvs.cur_peer);
-		}
-		free_unpkd_tlv(tlv);
 
 		clear_dcbx_manifest(dcbx);
-		dcbx->dcbdu = 0;
 	}
 
-	return TLV_OK;
+	/* TLV is not handled by DCBx module return invalid to
+	 * indicate lldpad core should continue to look for
+	 * a module to handle this TLV
+	 */
+	return SUBTYPE_INVALID;
 }
 
-u8 dcbx_mibDeleteObjects(struct port *port)
+u8 dcbx_mibDeleteObjects(struct port *port, struct lldp_agent *agent)
 {
 	control_protocol_attribs  peer_control;
 	pg_attribs  peer_pg;
@@ -703,6 +810,10 @@ u8 dcbx_mibDeleteObjects(struct port *port)
 	llink_attribs peer_llink;
 	u32 subtype = 0;
 	u32 EventFlag = 0;
+	int i;
+
+	if (agent->type != NEAREST_BRIDGE)
+		return 0;
 
 	/* Set any stored values for this TLV to !Present */
 	if (get_peer_pg(port->ifname, &peer_pg) == dcb_success) {
@@ -725,16 +836,18 @@ u8 dcbx_mibDeleteObjects(struct port *port)
 		return (u8)-1;
 	}
 
-	if (get_peer_app(port->ifname, subtype, &peer_app) ==
-		dcb_success) {
-		if (peer_app.protocol.TLVPresent == true) {
-			peer_app.protocol.TLVPresent = false;
-			peer_app.Length = 0;
-			put_peer_app(port->ifname, subtype, &peer_app);
-			DCB_SET_FLAGS(EventFlag, DCB_REMOTE_CHANGE_APPTLV);
+	for (i = 0; i < DCB_MAX_APPTLV; i++) {
+		if (get_peer_app(port->ifname, i, &peer_app) ==
+			dcb_success) {
+			if (peer_app.protocol.TLVPresent == true) {
+				peer_app.protocol.TLVPresent = false;
+				peer_app.Length = 0;
+				put_peer_app(port->ifname, i, &peer_app);
+				DCB_SET_FLAGS(EventFlag, DCB_REMOTE_CHANGE_APPTLV(i));
+			}
+		} else {
+			return (u8)-1;
 		}
-	} else {
-		return (u8)-1;
 	}
 
 	if (get_peer_llink(port->ifname, subtype, &peer_llink) == dcb_success) {

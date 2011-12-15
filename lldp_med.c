@@ -20,11 +20,12 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdlib.h>
+#include <errno.h>
 #include <net/if.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
@@ -35,7 +36,6 @@
 #include "lldp_med.h"
 #include "messages.h"
 #include "config.h"
-#include "common.h"
 #include "libconfig.h"
 #include "lldp_mand_clif.h"
 #include "lldp_med_cmds.h"
@@ -82,23 +82,24 @@ struct tlv_info_locid {
 } __attribute__ ((__packed__));
 
 static const struct lldp_mod_ops med_ops =  {
-	.lldp_mod_register 	= med_register,
-	.lldp_mod_unregister 	= med_unregister,
+	.lldp_mod_register	= med_register,
+	.lldp_mod_unregister	= med_unregister,
 	.lldp_mod_gettlv	= med_gettlv,
 	.lldp_mod_ifup		= med_ifup,
 	.lldp_mod_ifdown	= med_ifdown,
 	.get_arg_handler	= med_get_arg_handlers,
 };
 
-static struct med_data *med_data(const char *ifname)
+static struct med_data *med_data(const char *ifname, enum agent_type type)
 {
 	struct med_user_data *mud;
 	struct med_data *md = NULL;
 
-	mud = find_module_user_data_by_if(ifname, &lldp_head, LLDP_MOD_MED);
+	mud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_MED);
 	if (mud) {
 		LIST_FOREACH(md, &mud->head, entry) {
-			if (!strncmp(ifname, md->ifname, IFNAMSIZ))
+			if (!strncmp(ifname, md->ifname, IFNAMSIZ) &&
+			    (type == md->agenttype))
 				return md;
 		}
 	}
@@ -149,7 +150,8 @@ static u16 med_get_caps(u8 devtype)
  *
  * Returns 0 on success
  */
-static int med_bld_medcaps_tlv(struct med_data *md)
+static int med_bld_medcaps_tlv(struct med_data *md,
+			       struct lldp_agent *agent)
 {
 	int rc = EPERM;
 	struct tlv_info_medcaps medcaps;
@@ -159,17 +161,19 @@ static int med_bld_medcaps_tlv(struct med_data *md)
 	FREE_UNPKD_TLV(md, medcaps);
 
 	/* must be enabled */
-	if (!is_tlv_txenabled(md->ifname, TLVID_MED(LLDP_MED_CAPABILITIES))) {
+	if (!is_tlv_txenabled(md->ifname, agent->type,
+			      TLVID_MED(LLDP_MED_CAPABILITIES))) {
 		LLDPAD_DBG("%s:%s:MED Caps is not enabled\n",
 			__func__, md->ifname);
 		rc = 0;
 		goto out_err;
 	}
 
-	/* load cap tlv info. from config */
+	/* load cap tlv info from config */
 	memset(&medcaps, 0, sizeof(medcaps));
-	if (get_config_tlvinfo_bin(md->ifname, TLVID_MED(LLDP_MED_CAPABILITIES),
-			  (void *)&medcaps, sizeof(medcaps))) {
+	if (get_config_tlvinfo_bin(md->ifname, agent->type,
+				   TLVID_MED(LLDP_MED_CAPABILITIES),
+				   &medcaps, sizeof(medcaps))) {
 		LLDPAD_DBG("%s:%s:Build MED Caps as Endpoint Class I\n",
 			__func__, md->ifname);
 		goto out_bld;
@@ -177,7 +181,7 @@ static int med_bld_medcaps_tlv(struct med_data *md)
 
 	/* validate the data loaded */
 	if (LLDP_MED_DEVTYPE_DEFINED(medcaps.devtype) &&
-	    (medcaps.devtype == get_med_devtype(md->ifname))) {
+	    (medcaps.devtype == get_med_devtype(md->ifname, agent->type))) {
 		LLDPAD_DBG("%s:%s:MED Caps loaded from config as type %d\n",
 			__func__, md->ifname, medcaps.devtype);
 		goto out_create;
@@ -189,7 +193,7 @@ out_bld:
 	/* Not in config, build from scratch */
 	hton24(medcaps.oui, OUI_TIA_TR41);
 	medcaps.subtype = LLDP_MED_CAPABILITIES;
-	medcaps.devtype = get_med_devtype(md->ifname);
+	medcaps.devtype = get_med_devtype(md->ifname, agent->type);
 	medcaps.medcaps = htons(med_get_caps(medcaps.devtype));
 
 out_create:
@@ -210,8 +214,9 @@ out_create:
 	}
 	memcpy(tlv->info, &medcaps, tlv->length);
 	md->medcaps = tlv;
-	set_med_devtype(md->ifname, medcaps.devtype);
-	set_config_tlvinfo_bin(md->ifname, TLVID_MED(LLDP_MED_CAPABILITIES),
+	set_med_devtype(md->ifname, agent->type, medcaps.devtype);
+	set_config_tlvinfo_bin(md->ifname, agent->type,
+			       TLVID_MED(LLDP_MED_CAPABILITIES),
 			       &medcaps, sizeof(medcaps));
 	rc = 0;
 out_err:
@@ -292,16 +297,17 @@ out_err:
  * med_bld_invtlv - builds inventory tlv by subtype
  * @md: the med data struct
  * @subtype: LLDP-MED inventory tlv subtype
- *
- * Must be called with init_cfg() called already
  */
-static struct unpacked_tlv *med_bld_invtlv(struct med_data *md, u8 subtype)
+static struct unpacked_tlv *med_bld_invtlv(struct med_data *md,
+					   struct lldp_agent *agent,
+					   u8 subtype)
 {
 	int length;
 	u8 desc[33];
 	struct unpacked_tlv *tlv = NULL;
 
-	if (!is_tlv_txenabled(md->ifname, TLVID_MED(subtype))) {
+	if (!is_tlv_txenabled(md->ifname, agent->type,
+			      TLVID_MED(subtype))) {
 		LLDPAD_DBG("%s:%s:subtype %d tx disabled\n",
 			__func__, md->ifname, subtype);
 		goto out_err;
@@ -345,7 +351,8 @@ out_err:
  * @md: the med data struct
  *
  */
-static int med_bld_inventory_tlv(struct med_data *md)
+static int med_bld_inventory_tlv(struct med_data *md,
+				 struct lldp_agent *agent)
 {
 	FREE_UNPKD_TLV(md, inv_hwrev);
 	FREE_UNPKD_TLV(md, inv_fwrev);
@@ -354,13 +361,13 @@ static int med_bld_inventory_tlv(struct med_data *md)
 	FREE_UNPKD_TLV(md, inv_manufacturer);
 	FREE_UNPKD_TLV(md, inv_modelname);
 	FREE_UNPKD_TLV(md, inv_assetid);
-	md->inv_hwrev = med_bld_invtlv(md, LLDP_MED_INV_HWREV);
-	md->inv_fwrev = med_bld_invtlv(md, LLDP_MED_INV_FWREV);
-	md->inv_swrev = med_bld_invtlv(md, LLDP_MED_INV_SWREV);
-	md->inv_serial = med_bld_invtlv(md, LLDP_MED_INV_SERIAL);
-	md->inv_manufacturer = 	med_bld_invtlv(md, LLDP_MED_INV_MANUFACTURER);
-	md->inv_modelname = med_bld_invtlv(md, LLDP_MED_INV_MODELNAME);
-	md->inv_assetid = med_bld_invtlv(md, LLDP_MED_INV_ASSETID);
+	md->inv_hwrev = med_bld_invtlv(md, agent, LLDP_MED_INV_HWREV);
+	md->inv_fwrev = med_bld_invtlv(md, agent, LLDP_MED_INV_FWREV);
+	md->inv_swrev = med_bld_invtlv(md, agent, LLDP_MED_INV_SWREV);
+	md->inv_serial = med_bld_invtlv(md, agent, LLDP_MED_INV_SERIAL);
+	md->inv_manufacturer = med_bld_invtlv(md, agent, LLDP_MED_INV_MANUFACTURER);
+	md->inv_modelname = med_bld_invtlv(md, agent, LLDP_MED_INV_MODELNAME);
+	md->inv_assetid = med_bld_invtlv(md, agent, LLDP_MED_INV_ASSETID);
 	return 0;
 }
 
@@ -383,16 +390,14 @@ static int med_is_pse(const char *ifname)
  *
  * Returns 0 for success or error code for failure
  *
- * Must be called with init_cfg() called already, if optional
- * or disabled, and fails to build tlv, returns 0.
- *
  * TODO:
  * When Extended Power via MDI TLV is enabled, it is recommended
  * by the spec ANSI-TIA-1057 Clause 9.2.4 to to disable 802.3AB
  * Optional Power via MDI TLV.
  *
  */
-static int med_bld_powvmdi_tlv(struct med_data *md)
+static int med_bld_powvmdi_tlv(struct med_data *md,
+			       struct lldp_agent *agent)
 {
 	int rc = EINVAL;
 	int devtype;
@@ -403,7 +408,7 @@ static int med_bld_powvmdi_tlv(struct med_data *md)
 	/* free old one if it exists */
 	FREE_UNPKD_TLV(md, extpvm);
 
-	devtype = get_med_devtype(md->ifname);
+	devtype = get_med_devtype(md->ifname, agent->type);
 	switch (devtype) {
 	case LLDP_MED_DEVTYPE_NETWORK_CONNECTIVITY:
 		mandatory = med_is_pse(md->ifname);
@@ -427,7 +432,8 @@ static int med_bld_powvmdi_tlv(struct med_data *md)
 		goto out_err;
 	}
 	/* Mandatory */
-	if (!is_tlv_txenabled(md->ifname, TLVID_MED(LLDP_MED_EXTENDED_PVMDI))) {
+	if (!is_tlv_txenabled(md->ifname, agent->type,
+			      TLVID_MED(LLDP_MED_EXTENDED_PVMDI))) {
 		LLDPAD_DBG("%s:%s: Must enable Extended Power via MDI TLV as it"
 			" mandatory for device type %d\n",
 			__func__, md->ifname, devtype);
@@ -435,8 +441,9 @@ static int med_bld_powvmdi_tlv(struct med_data *md)
 		goto out_err;
 	}
 	/* Load from config */
-	if (get_config_tlvinfo_bin(md->ifname, TLVID_MED(LLDP_MED_NETWORK_POLICY),
-			       (void *)&extpvm, sizeof(extpvm))) {
+	if (get_config_tlvinfo_bin(md->ifname, agent->type,
+				   TLVID_MED(LLDP_MED_NETWORK_POLICY),
+				   &extpvm, sizeof(extpvm))) {
 		LLDPAD_DBG("%s:%s: Must configure Extended Power via MDI TLV as "
 			" currently it has to be manually configured\n",
 			__func__, md->ifname);
@@ -444,7 +451,8 @@ static int med_bld_powvmdi_tlv(struct med_data *md)
 		goto out_err;
 	}
 	/* disable Optional Power via MDI */
-	tlv_disabletx(md->ifname, TLVID_8023(LLDP_8023_POWER_VIA_MDI));
+	tlv_disabletx(md->ifname, agent->type,
+		      TLVID_8023(LLDP_8023_POWER_VIA_MDI));
 
 	/* We should have a valid tlv_info_extpvm here */
 	if (extpvm.subtype != LLDP_MED_EXTENDED_PVMDI) {
@@ -481,14 +489,12 @@ out_err:
  *
  * Returns 0 for success or error code for failure
  *
- * Must be called with init_cfg() called already, if optional
- * or disabled, and fails to build tlv, returns 0.
- *
- * TODO: currenly only supports load from config, will not transmit if
+ * TODO: currently only supports load from config, will not transmit if
  * if it's not configured
  *
  */
-static int med_bld_locid_tlv(struct med_data *md)
+static int med_bld_locid_tlv(struct med_data *md,
+			     struct lldp_agent *agent)
 {
 	int rc = 0;
 	size_t length;
@@ -499,7 +505,8 @@ static int med_bld_locid_tlv(struct med_data *md)
 	/* free old one if it exists */
 	FREE_UNPKD_TLV(md, locid);
 
-	if (!is_tlv_txenabled(md->ifname, TLVID_MED(LLDP_MED_LOCATION_ID))) {
+	if (!is_tlv_txenabled(md->ifname, agent->type,
+			      TLVID_MED(LLDP_MED_LOCATION_ID))) {
 		LLDPAD_DBG("%s:%s:Location Id TLV is not enabled\n",
 			__func__, md->ifname);
 		rc = 0;
@@ -513,10 +520,11 @@ static int med_bld_locid_tlv(struct med_data *md)
 		goto out_err;
 
 	memset(locstr, 0, length);
-	if (get_config_tlvinfo_str(md->ifname, TLVID_MED(LLDP_MED_LOCATION_ID),
-			       	      (void *)locstr, length)) {
+	if (get_config_tlvinfo_str(md->ifname, agent->type,
+				   TLVID_MED(LLDP_MED_LOCATION_ID),
+				   locstr, length)) {
 		LLDPAD_DBG("%s:%s:Location Id TLV must be"
-			" adminilocstratively configured\n",
+			" administratively configured\n",
 			__func__, md->ifname);
 		goto out_err;
 	}
@@ -564,19 +572,22 @@ out_err:
  *
  * Returns 0 for success or error code for failure
  *
- * Either gets the netpoli from the config or build from scratch. Must not
- * be called w/o calling init_cfg() first.
+ * Either gets the netpoli from the config or build from scratch.
  *
- * TODO: currenly only supports load from config, will fail if it's
+ * TODO: currently only supports load from config, will fail if it's
  * not configured
  */
-static int med_get_netpoli(struct med_data *md, struct tlv_info_netpoli *n)
+static int med_get_netpoli(struct med_data *md,
+			   struct lldp_agent *agent,
+			   struct tlv_info_netpoli *n)
 {
-	if (!is_tlv_txenabled(md->ifname, TLVID_MED(LLDP_MED_NETWORK_POLICY)))
+	if (!is_tlv_txenabled(md->ifname, agent->type,
+			      TLVID_MED(LLDP_MED_NETWORK_POLICY)))
 		return ENOENT;
 
-	if (!get_config_tlvinfo_bin(md->ifname, TLVID_MED(LLDP_MED_NETWORK_POLICY),
-			       (void *)n, sizeof(*n)))
+	if (!get_config_tlvinfo_bin(md->ifname, agent->type,
+				    TLVID_MED(LLDP_MED_NETWORK_POLICY),
+				    n, sizeof(*n)))
 		return 0;
 	return EPERM;
 }
@@ -586,11 +597,9 @@ static int med_get_netpoli(struct med_data *md, struct tlv_info_netpoli *n)
  * @port: the port associated
  *
  * Returns 0 for success or error code for failure
- *
- * Must be called with init_cfg() called already, if optional
- * or disabled, and fails to build tlv, returns 0.
  */
-static int med_bld_netpoli_tlv(struct med_data *md)
+static int med_bld_netpoli_tlv(struct med_data *md,
+			       struct lldp_agent *agent)
 {
 	int rc = EPERM;
 	int devtype;
@@ -600,11 +609,11 @@ static int med_bld_netpoli_tlv(struct med_data *md)
 	/* free old one if it exists */
 	FREE_UNPKD_TLV(md, netpoli);
 
-	devtype = get_med_devtype(md->ifname);
+	devtype = get_med_devtype(md->ifname, agent->type);
 	switch (devtype) {
 	case LLDP_MED_DEVTYPE_NETWORK_CONNECTIVITY:
 		/* Only transmit if it is administratively configured */
-		rc = med_get_netpoli(md, &netpoli);
+		rc = med_get_netpoli(md, agent, &netpoli);
 		if (rc == ENOENT)
 			goto out_nobld;
 		if (rc == EPERM) {
@@ -617,7 +626,7 @@ static int med_bld_netpoli_tlv(struct med_data *md)
 		break;
 	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_I:
 		/* Optional: skip if failed to get it */
-		if (med_get_netpoli(md, &netpoli)) {
+		if (med_get_netpoli(md, agent, &netpoli)) {
 			LLDPAD_DBG("%s:%s: Skipping"
 				" Network Policy TLV for Class I Device\n",
 			 	__func__, md->ifname);
@@ -627,7 +636,7 @@ static int med_bld_netpoli_tlv(struct med_data *md)
 	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_II:
 	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_III:
 		/* Mandatory */
-		if (med_get_netpoli(md, &netpoli)) {
+		if (med_get_netpoli(md, agent, &netpoli)) {
 			LLDPAD_DBG("%s:%s: Must enable and configure"
 				" Network Policy TLV for Class II/III Device\n",
 			 	__func__, md->ifname);
@@ -679,7 +688,8 @@ out_err:
  * Returns 0 for success or error code for failure
  *
  */
-static int med_bld_tlv(struct med_data *md)
+static int med_bld_tlv(struct med_data *md,
+		       struct lldp_agent *agent)
 {
 	int rc = EPERM;
 
@@ -688,12 +698,9 @@ static int med_bld_tlv(struct med_data *md)
 		goto out_err;
 	}
 
-	/* Prepare the config for later query */
-	if (!init_cfg())
-		goto out_err;
-
 	/* no build if not enabled */
-	if (!is_tlv_txenabled(md->ifname, TLVID_MED(LLDP_MED_RESERVED))) {
+	if (!is_tlv_txenabled(md->ifname, agent->type,
+			      TLVID_MED(LLDP_MED_RESERVED))) {
 		LLDPAD_DBG("%s:%s:LLDP-MED is not enabled\n",
 			__func__, md->ifname);
 		rc = 0;
@@ -701,21 +708,30 @@ static int med_bld_tlv(struct med_data *md)
 	}
 
 	/* no build if enabled no devtype is given */
-	if (!LLDP_MED_DEVTYPE_DEFINED(get_med_devtype(md->ifname))) {
+	if (!LLDP_MED_DEVTYPE_DEFINED(get_med_devtype(md->ifname, agent->type))) {
 		LLDPAD_DBG("%s:%s:LLDP-MED devtype is not defined\n",
 			__func__, md->ifname);
 		goto out_err;
 	}
 
 	/* MED Cap is always mandatory for MED */
-	if (med_bld_medcaps_tlv(md)) {
+	if (med_bld_medcaps_tlv(md, agent)) {
 		LLDPAD_DBG("%s:%s:MED Capabilities TLV is mandatory!\n",
 			__func__, md->ifname);
 		goto out_err;
 	}
 
+	/* MAC PHY TLV is mandatory for MED */
+	if (!is_tlv_txenabled(md->ifname, agent->type,
+			      TLVID_8023(LLDP_8023_MACPHY_CONFIG_STATUS))) {
+		LLDPAD_DBG("%s:%s MAC PHY Config is mandatory for MED\n",
+				__func__, md->ifname);
+		rc = ENOTTY;
+		goto out_err;
+	}
+
 	/* Build optional and conditional ones based on device type:
- 	 *
+	 *
 	 * LLDP-MED Endpoint Class I TLV Set: ANSI/TIA-1057-2006, 10.2.1.2
 	 *	- Capabilities: mandatory
 	 * 	- Network Policy: optional
@@ -743,22 +759,22 @@ static int med_bld_tlv(struct med_data *md)
 	 * 	- Inventory: optional
 	 *
 	 */
-	if (med_bld_netpoli_tlv(md)) {
+	if (med_bld_netpoli_tlv(md, agent)) {
 		LLDPAD_DBG("%s:%s:med_bld_netpoli_tlv() failed\n",
 				__func__, md->ifname);
 		goto out_err;
 	}
-	if (med_bld_locid_tlv(md)) {
+	if (med_bld_locid_tlv(md, agent)) {
 		LLDPAD_DBG("%s:%s:med_bld_locid_tlv() failed\n",
 				__func__, md->ifname);
 		goto out_err;
 	}
-	if (med_bld_powvmdi_tlv(md)) {
+	if (med_bld_powvmdi_tlv(md, agent)) {
 		LLDPAD_DBG("%s:%s:med_bld_powvmdi_tlv() failed\n",
 				__func__, md->ifname);
 		goto out_err;
 	}
-	if (med_bld_inventory_tlv(md)) {
+	if (med_bld_inventory_tlv(md, agent)) {
 		LLDPAD_DBG("%s:%s:med_bld_inventory_tlv() failed\n",
 				__func__, md->ifname);
 		goto out_err;
@@ -804,18 +820,19 @@ static void med_free_data(struct med_user_data *mud)
 	}
 }
 
-struct packed_tlv *med_gettlv(struct port *port)
+struct packed_tlv *med_gettlv(struct port *port,
+			      struct lldp_agent *agent)
 {
 	size_t size;
 	struct med_data *md;
 	struct packed_tlv *ptlv = NULL;
 
-	md = med_data(port->ifname);
+	md = med_data(port->ifname, agent->type);
 	if (!md)
 		goto out_err;
 
 	med_free_tlv(md);
-	if (med_bld_tlv(md)) {
+	if (med_bld_tlv(md, agent)) {
 		goto out_err;
 	}
 
@@ -863,11 +880,11 @@ out_err:
 	return NULL;
 }
 
-void med_ifdown(char *ifname)
+void med_ifdown(char *ifname, struct lldp_agent *agent)
 {
 	struct med_data *md;
 
-	md = med_data(ifname);
+	md = med_data(ifname, agent->type);
 	if (!md)
 		goto out_err;
 
@@ -881,12 +898,12 @@ out_err:
 	return;
 }
 
-void med_ifup(char *ifname)
+void med_ifup(char *ifname, struct lldp_agent *agent)
 {
 	struct med_data *md;
 	struct med_user_data *mud;
 
-	md = med_data(ifname);
+	md = med_data(ifname, agent->type);
 	if (md) {
 		LLDPAD_DBG("%s:%s exists\n", __func__, ifname);
 		goto out_err;
@@ -901,17 +918,19 @@ void med_ifup(char *ifname)
 	}
 	memset(md, 0, sizeof(struct med_data));
 	strncpy(md->ifname, ifname, IFNAMSIZ);
+	md->agenttype = agent->type;
 
-	if (med_bld_tlv(md)) {
+	if (med_bld_tlv(md, agent)) {
 		LLDPAD_DBG("%s:%s med_bld_tlv failed\n",
 			__func__, ifname);
 		free(md);
 		goto out_err;
 	}
-	mud = find_module_user_data_by_if(ifname, &lldp_head, LLDP_MOD_MED);
+	mud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_MED);
 	LIST_INSERT_HEAD(&mud->head, md, entry);
 	LLDPAD_INFO("%s:port %s added\n", __func__, ifname);
 	return;
+
 out_err:
 	LLDPAD_INFO("%s:port %s adding failed\n", __func__, ifname);
 	return;
@@ -924,13 +943,13 @@ struct lldp_module *med_register(void)
 
 	mod = malloc(sizeof(*mod));
 	if (!mod) {
-		LLDPAD_ERR(" failed to malloc LLDP-MED module data");
+		LLDPAD_ERR("failed to malloc LLDP-MED module data\n");
 		goto out_err;
 	}
 	mud = malloc(sizeof(struct med_user_data));
 	if (!mud) {
 		free(mod);
-		LLDPAD_ERR(" failed to malloc LLDP-MED module user data");
+		LLDPAD_ERR("failed to malloc LLDP-MED module user data\n");
 		goto out_err;
 	}
 	LIST_INIT(&mud->head);
@@ -940,6 +959,7 @@ struct lldp_module *med_register(void)
 
 	LLDPAD_INFO("%s:done\n", __func__);
 	return mod;
+
 out_err:
 	LLDPAD_INFO("%s:failed\n", __func__);
 	return NULL;

@@ -25,13 +25,18 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "includes.h"
+#include <stdlib.h>
+#include <stdio.h>
 #include <dirent.h>
+#include <unistd.h>
+#include <signal.h>
+#include <ctype.h>
+#include <errno.h>
+#include <getopt.h>
 
 #include "clif.h"
 #include "lldp_mand_clif.h"
@@ -39,6 +44,11 @@
 #include "lldp_med_clif.h"
 #include "lldp_8023_clif.h"
 #include "lldp_dcbx_clif.h"
+#include "lldp_evb_clif.h"
+#include "lldp_vdp_clif.h"
+#include "lldp_8021qaz_clif.h"
+#include "lldp_orgspec_clif.h"
+#include "lldp_cisco_clif.h"
 #include "lldptool.h"
 #include "lldptool_cli.h"
 #include "lldp_mod.h"
@@ -48,6 +58,7 @@
 #include "lldp_dcbx.h"
 #include "version.h"
 #include "lldpad.h"
+#include "lldp_util.h"
 
 static int show_raw;
 
@@ -123,11 +134,19 @@ static const char *commands_options =
 "  -i [ifname]                          network interface\n"
 "  -V [tlvid]                           TLV identifier\n"
 "                                       may be numeric or keyword (see below)\n"
+"  -c <argument list>                   used with get TLV command to specify\n"
+"                                       that the list of configuration elements\n"
+"                                       should be retrieved\n"
+"  -d                                   use to delete specified argument from\n"
+"                                       the configuration.  (Currently\n"
+"                                       implemented for DCBX App TLV settings)\n"
 "  -n                                   \"neighbor\" option for command\n"
-"  -a                                   \"add\" option for command\n"
-"  -d                                   \"remove\" option for command\n"
 "  -r                                   show raw message\n"
-"  -R                                   show only raw messages\n";
+"  -R                                   show only raw messages\n"
+"  -g					destination agent (may be one of):\n"
+"						- nearestbridge (nb) (default)\n"
+"						- nearestcustomerbridge (ncb)\n"
+"						- nearestnontpmrbridge (nntpmrb)\n";
 
 static const char *commands_help =
 "Commands:\n"
@@ -144,8 +163,6 @@ static const char *commands_help =
 static struct clif *clif_conn;
 static int cli_quit = 0;
 static int cli_attached = 0;
-static const char *clif_iface_dir = CLIF_IFACE_DIR;
-static char *clif_ifname = NULL;
 
 /*
  * insert to head, so first one is last
@@ -156,6 +173,11 @@ struct lldp_module *(*register_tlv_table[])(void) = {
 	ieee8023_cli_register,
 	med_cli_register,
 	dcbx_cli_register,
+	evb_cli_register,
+	vdp_cli_register,
+	ieee8021qaz_cli_register,
+	orgspec_cli_register,
+	cisco_cli_register,
 	NULL,
 };
 
@@ -201,7 +223,7 @@ int hex2int(char *b)
 	int i;
 	int n=0;
 	int m;
-	
+
 	for (i=0,m=1; i<2; i++,m--) {
 		if (isxdigit(*(b+i))) {
 			if (*(b+i) <= '9')
@@ -255,26 +277,6 @@ int parse_print_message(char *msg, int print)
 
 	return status;
 }
-
-static struct clif *cli_open_connection(const char *ifname)
-{
-	char *cfile;
-	int flen;
-
-	if (ifname == NULL)
-		return NULL;
-
-	flen = strlen(clif_iface_dir) + strlen(ifname) + 2;
-	cfile = malloc(flen);
-	if (cfile == NULL)
-		return NULL;
-	snprintf(cfile, flen, "%s/%s", clif_iface_dir, ifname);
-
-	clif_conn = clif_open(cfile);
-	free(cfile);
-	return clif_conn;
-}
-
 
 static void cli_close_connection(void)
 {
@@ -387,60 +389,6 @@ static int cli_cmd_quit(struct clif *clif, int argc, char *argv[],
 	return 0;
 }
 
-
-static void cli_list_interfaces(struct clif *clif)
-{
-	struct dirent *dent;
-	DIR *dir;
-
-	dir = opendir(clif_iface_dir);
-	if (dir == NULL) {
-		printf("Control interface directory '%s' could not be "
-		       "opened.\n", clif_iface_dir);
-		return;
-	}
-
-	printf("Available interfaces:\n");
-	while ((dent = readdir(dir))) {
-		if (strcmp(dent->d_name, ".") == 0 ||
-		    strcmp(dent->d_name, "..") == 0)
-			continue;
-		printf("%s\n", dent->d_name);
-	}
-	closedir(dir);
-}
-
-
-static int cli_cmd_interface(struct clif *clif, int argc, char *argv[],
-			     struct cmd *command, int raw)
-{
-	char attach_str[9] = "";
-	u32 mod_id = LLDP_MOD_MAND;
-
-	if (argc < 1) {
-		cli_list_interfaces(clif);
-		return 0;
-	}
-
-	bin2hexstr((u8*)&mod_id, 4, attach_str, 8);
-	cli_close_connection();
-	free(clif_ifname);
-	clif_ifname = strdup(argv[0]);
-
-	if (cli_open_connection(clif_ifname)) {
-		printf("Connected to interface '%s.\n", clif_ifname);
-		if (clif_attach(clif_conn, attach_str) == 0)
-			cli_attached = 1;
-		else
-			printf("Warning: Failed to attach to lldpad.\n");
-	} else {
-		printf("Could not connect to interface '%s' - re-trying\n",
-			clif_ifname);
-	}
-	return 0;
-}
-
-
 struct cli_cmd {
 	lldp_cmd cmdcode;
 	const char *cmdstr;
@@ -451,7 +399,6 @@ struct cli_cmd {
 static struct cli_cmd cli_commands[] = {
 	{ cmd_ping,     "ping",      cli_cmd_ping },
 	{ cmd_help,     "help",      cli_cmd_help },
-	{ cmd_if,       "interface", cli_cmd_interface },
 	{ cmd_license,  "license",   cli_cmd_license },
 	{ cmd_version,  "version",   cli_cmd_version },
 	{ cmd_quit,     "quit",      cli_cmd_quit },
@@ -491,6 +438,17 @@ void print_args(int argc, char *argv[])
 		printf("\tremaining arg %d = %s\n", i, argv[i]);
 }
 
+static struct option lldptool_opts[] = {
+	{"help", 0, NULL, 'h'},
+	{"version", 0, NULL, 'v'},
+	{"stats", 0, NULL, 'S'},
+	{"get-tlv", 0, NULL, 't'},
+	{"set-tlv", 0, NULL, 'T'},
+	{"get-lldp", 0, NULL, 'l'},
+	{"set-lldp", 0, NULL, 'L'},
+	{0, 0, 0, 0}
+};
+
 static int request(struct clif *clif, int argc, char *argv[])
 {
 	struct cli_cmd *cmd, *match = NULL;
@@ -500,17 +458,20 @@ static int request(struct clif *clif, int argc, char *argv[])
 	int newraw = 0;
 	int numargs = 0;
 	char **argptr = &argv[0];
-
+	char *end;
 	int c;
+	int option_index;
 
 	memset((void *)&command, 0, sizeof(command));
 	command.cmd = cmd_nop;
+	command.type = NEAREST_BRIDGE;
 	command.module_id = LLDP_MOD_MAND;
 	command.tlvid = INVALID_TLVID;
 
 	opterr = 0;
 	for (;;) {
-		c = getopt(argc, argv, "Si:tTlLadhnvrRqV:");
+		c = getopt_long(argc, argv, "Si:tTlLhcdnvrRqV:g:",
+				lldptool_opts, &option_index);
 		if (c < 0)
 			break;
 		switch (c) {
@@ -525,12 +486,40 @@ static int request(struct clif *clif, int argc, char *argv[])
 			strncpy(command.ifname, optarg, IFNAMSIZ);
 			command.ifname[IFNAMSIZ] ='\0';
 			break;
+		case 'g':
+			if (!strcasecmp(optarg, "nearestbridge") ||
+			    !strcasecmp(optarg, "nb"))
+				command.type = NEAREST_BRIDGE;
+			else if (!strcasecmp(optarg, "nearestcustomerbridge") ||
+				 !strcasecmp(optarg, "ncb"))
+				command.type = NEAREST_CUSTOMER_BRIDGE;
+			else if (!strcasecmp(optarg, "nearestnontmprbridge") ||
+				 !strcasecmp(optarg, "nntpmrb"))
+				command.type = NEAREST_NONTPMR_BRIDGE;
+			else {
+				printf("Invalid agent specified !\n\n");
+				return -1;
+			}
+			break;
 		case 'V':
-			command.tlvid = strtoul(optarg, (char **) NULL, 0);
-			if (!command.tlvid)
+			if (command.tlvid != INVALID_TLVID) {
+				printf("\nInvalid command: multiple TLV "
+				       "identifiers: %s\n", optarg);
+				return -1;
+			}
+
+			/* Currently tlvid unset lookup and verify parameter */
+			errno = 0;
+			command.tlvid = strtoul(optarg, &end, 0);
+
+			if (!command.tlvid || errno || *end != '\0' ||
+			    end == optarg) {
 				command.tlvid = lookup_tlvid(optarg);
+			}
+
 			if (command.tlvid == INVALID_TLVID) {
-				printf("invalid TLV identifier: %s\n\n", optarg);
+				printf("\nInvalid TLV identifier: %s\n",
+					optarg);
 				return -1;
 			}
 			break;
@@ -549,14 +538,14 @@ static int request(struct clif *clif, int argc, char *argv[])
 		case 'L':
 			command.cmd = cmd_set_lldp;
 			break;
-		case 'a':
-			command.ops |= op_add;
+		case 'c':
+			command.ops |= op_config;
+			break;
+		case 'd':
+			command.ops |= op_delete;
 			break;
 		case 'n':
 			command.ops |= op_neighbor;
-			break;
-		case 'd':
-			command.ops |= op_remove;
 			break;
 		case 'h':
 			command.cmd = cmd_help;
@@ -663,6 +652,7 @@ static void cli_interactive()
 	char cmd[1024], *res, *argv[max_args], *pos;
 	int argc;
 
+	setlinebuf(stdout);
 	printf("\nInteractive mode\n\n");
 
 	do {
@@ -719,7 +709,7 @@ static void cli_alarm(int sig)
 		cli_close_connection();
 	}
 	if (!clif_conn) {
-		clif_conn = cli_open_connection(clif_ifname);
+		clif_conn = clif_open();
 		if (clif_conn) {
 			char attach_str[9] = "";
 			u32 mod_id = LLDP_MOD_MAND;
@@ -750,21 +740,7 @@ int main(int argc, char *argv[])
 		printf("%s\n\n%s\n\n", cli_version, cli_license);
 
 	for (;;) {
-		if (clif_ifname == NULL) {
-			struct dirent *dent;
-			DIR *dir = opendir(clif_iface_dir);
-			if (dir) {
-				while ((dent = readdir(dir))) {
-					if (strcmp(dent->d_name, ".") == 0 ||
-					    strcmp(dent->d_name, "..") == 0)
-						continue;
-					clif_ifname = strdup(dent->d_name);
-					break;
-				}
-				closedir(dir);
-			}
-		}
-		clif_conn = cli_open_connection(clif_ifname);
+		clif_conn = clif_open();
 		if (clif_conn) {
 			if (warning_displayed)
 				printf("Connection established.\n");
@@ -804,7 +780,6 @@ int main(int argc, char *argv[])
 		ret = !!ret;
 	}
 
-	free(clif_ifname);
 	cli_close_connection();
 
 	deinit_modules();

@@ -20,19 +20,18 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef _LLDP_TLV_H
 #define _LLDP_TLV_H
 
+#include "lldp.h"
+#include "lldp/ports.h"
+
 #define ADDR2TLVSTR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
 #define TLVSTR "%02x%02x%02x%02x%02x%02x"   /* Localization OK */
-
-#include "dcb_osdep.h"
-#include "lldp/ports.h"
 
 #define TLV_OK 0
 #define TLV_ERR 1
@@ -73,6 +72,7 @@
 
 /* Protocol EtherTypes */
 #define PROTO_ID_FCOE                  0x0689 /* network byte order */
+#define PROTO_ID_ISCSI                 0xBC0C /* network byte order, 3260 dec */
 #define PROTO_ID_FIP                   0x1489 /* network byte order */
 
 /* Protocol Selector Field */
@@ -144,6 +144,7 @@ int tlv_ok(struct unpacked_tlv *tlv);
 #define TLVID_8021(sub)		TLVID(OUI_IEEE_8021, (sub))
 #define TLVID_8023(sub)		TLVID(OUI_IEEE_8023, (sub))
 #define TLVID_MED(sub)		TLVID(OUI_TIA_TR41, (sub))
+#define TLVID_8021Qbg(sub)	TLVID(OUI_IEEE_8021Qbg, (sub))
 
 /* the size in bytes needed for a packed tlv from unpacked tlv */
 #define TLVSIZE(t) ((t) ? (2 + (t)->length) : 0)

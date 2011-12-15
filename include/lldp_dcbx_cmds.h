@@ -20,8 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
@@ -29,10 +28,11 @@
 #define CLIF_CMDS_H
 
 #include <sys/un.h>
+#include <stdbool.h>
 #include "clif_msgs.h"
 
 struct arg_handlers *dcbx_get_arg_handlers();
-void dont_advertise_dcbx_all(char *ifname);
+void dont_advertise_dcbx_all(char *ifname, bool ad);
 
 #define CLIF_RSP_MSG_OFF    0
 

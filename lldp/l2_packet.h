@@ -20,13 +20,15 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef L2_PACKET_H
 #define L2_PACKET_H
+
+#include <stdlib.h>
+#include "lldp.h"
 
 #define MAC2STR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
 #define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
@@ -36,6 +38,8 @@
 
 #define ETH_P_LLDP 0x88cc
 
+/* TODO: use extended ethertype until final ethertype is available */
+#define ETH_P_ECP 0x88b7
 
 #define ETH_FRAME_LEN   1514
 
@@ -55,11 +59,6 @@
 #ifndef ETH_MIN_PKT_LEN
 #define ETH_MIN_PKT_LEN     (ETH_MIN_DATA_LEN + ETH_HDR_LEN)
 #endif
-
-#define LLDP_MULTICAST_MAC 0x0180c200000e
-
-
-static const u8 multi_cast_source[ETH_ALEN] = {0x01,0x80,0xc2,0x00,0x00,0x0e};
 
 /**
  * struct l2_packet_data - Internal l2_packet data structure
@@ -125,6 +124,9 @@ int l2_packet_get_own_src_addr(struct l2_packet_data *l2, u8 *addr);
  */
 int l2_packet_get_own_addr(struct l2_packet_data *l2, u8 *addr);
 
+void get_remote_peer_mac_addr(struct port *port, struct lldp_agent *);
+void l2_packet_get_remote_addr(struct l2_packet_data *l2, u8 *addr);
+
 /**
  * l2_packet_send - Send a packet
  * @l2: Pointer to internal l2_packet data from l2_packet_init()
@@ -142,7 +144,7 @@ int l2_packet_send(struct l2_packet_data *l2, const u8 *dst_addr, u16 proto,
 
 void l2_packet_get_port_state(struct l2_packet_data *, u8 *);
 
-int add_bond_port(const char *ifname);
+struct port * add_bond_port(const char *ifname);
 int remove_bond_port(const char *ifname);
 void recv_on_bond(void *ctx, unsigned int ifindex, const u8 *buf, size_t len);
 void remove_all_bond_ports(void);

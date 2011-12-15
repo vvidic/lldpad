@@ -25,25 +25,24 @@
 # the file called "COPYING".
 #
 # Contact Information:
-# e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-# Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+# open-lldp Mailing List <lldp-devel@open-lldp.org>
 #
 ################################################################################
 #
 # lldpad	This shell script takes care of starting and stopping
 #		lldpad (including DCB capabilities exchange protocol)
 #
-# chkconfig: 345 20 80
+# chkconfig: - 20 80
 # description: Link Layer Discovery Protocol Agent Daemon
 #
 ### BEGIN INIT INFO
 # Provides: lldpad
-# Required-Start: $network $remote_fs
-# Required-Stop: $network $remote_fs
-# Default-Start: 2 3 4 5
-# Default-Stop: 0 1 6
-# Short-Description: Start and stop the lldp agent daemon
-# Description: Manage Link Layer Discovery Protocol Agent Daemon
+# Required-Start: network
+# Required-Stop:
+# Default-Start: 3 5
+# Default-Stop:
+# Short Description: Link Layer Discovery Protocol Agent Daemon
+# Description: Link Layer Discovery Protocol Agent Daemon
 ### END INIT INFO
 
 LLDPAD=lldpad
@@ -151,22 +150,36 @@ rc_reset
 # See how we were called.
 case "$1" in
 	start)
+		[ "$EUID" = "0" ] || exit 4
 		echo -n $"Starting $LLDPAD: "
 		$LLDPAD_BIN -k
 		start_daemon $LLDPAD_BIN -d $OPTIONS
 		rc_status -v
-		#[ $? -eq 0 ] && touch /var/lock/subsys/lldpad
+		[ $? -eq 0 ] && touch /var/lock/subsys/lldpad
 		;;
 	stop)
+		[ "$EUID" = "0" ] || exit 4
 		echo -n $"Shutting down $LLDPAD: "
 		killproc $LLDPAD
 		rc_status -v
-		#[ $? -eq 0 ] && rm -f /var/lock/subsys/lldpad
+		[ $? -eq 0 ] && rm -f /var/lock/subsys/lldpad
 		;;
 	status)
 		echo -n "Checking for service $LLDPAD: "
-		p=`pidof $LLDPAD`
-		rc_status -v
+  		p=`pidof $LLDPAD`
+		RC=$?
+		if [ "$RC" = "1" ]; then
+			echo "stopped"
+			if [ -f /var/lock/subsys/lldpad ]; then
+				rc_failed 2
+			elif [ -f /var/run/lldpad.pid ]; then
+				rc_failed 1
+			else
+				rc_failed 3
+			fi
+		else
+			echo "running"
+		fi
 		;;
 	try-restart|condrestart)
 		## Do a restart only if the service was active before.
@@ -176,19 +189,16 @@ case "$1" in
 			echo "${attn} Use try-restart ${done}(LSB)${attn}"\
 				"rather than condrestart ${warn}(RH)${norm}"
 		fi
+		$0 restart
+		;;
+	restart)
 		$0 status
 		if test $? = 0; then
-			$0 restart
+			$0 stop
+			$0 start
 		else
 			rc_reset	# Not running is not a failure.
 		fi
-		# Remember status and be quiet
-		rc_status
-		;;
-	restart)
-		$0 stop
-		$0 start
-
 		# Remember status and be quiet
 		rc_status
 		;;
@@ -223,9 +233,13 @@ case "$1" in
 		rc_failed 3
 		rc_status -v
 		;;
+	usage)
+		echo $"Usage: $0 {start|stop|status|try-restart|restart|force-reload|reload}"
+		exit 0
+	;;
 	*)
        		echo $"Usage: $0 {start|stop|status|try-restart|restart|force-reload|reload}"
-		exit 1
+		exit 2
 esac
 
 rc_exit

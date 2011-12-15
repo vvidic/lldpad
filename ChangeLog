@@ -1,3 +1,13 @@
+Changes from 0.9.40 through 0.9.43
+- New client interface (abstract sockets) to support initrd stage
+- IEEE 802.1Qaz support has been added
+- EVB support has been added
+Changes from 0.9.39 through 0.9.40
+- Add iSCSI TLV support
+Changes from 0.9.26 through 0.9.39
+- Numerous bug fixes and code cleanup
+- Reworked netlink event handling to be more robust and handle dropped nlmsgs.
+- DCBx puts netdevice into linkmode until dcbx negotiation complete
 Changes from 0.9.21 through 0.9.26
 - Fork dcbd into lldpad and make the daemon a generic LLDP agent deamon.
 Changes from 0.9.19 through 0.9.21

@@ -20,16 +20,19 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 %option nounput
+%option noinput
 
 %{
-#include "includes.h"
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <signal.h>
+#include <unistd.h>
 #include "lldp_dcbx_cmds.h"
 #include "dcb_types.h"
 #include "parse_cli.h"
@@ -219,7 +222,23 @@ gp	{ if (!cmd) {
 				BEGIN(getdcbxver);
 				}
 
-<getdcbxver>[12]		{ dcbx_version = atoi(yytext);
+<getdcbxver>[1256]		{ dcbx_version = atoi(yytext);
+				BEGIN(cmddone);
+				}
+
+<getdcbxver>cee			{ dcbx_version = dcbx_subtype2;
+				BEGIN(cmddone);
+				}
+
+<getdcbxver>cin			{ dcbx_version = dcbx_subtype1;
+				BEGIN(cmddone);
+				}
+
+<getdcbxver>force-cee		{ dcbx_version = dcbx_force_subtype2;
+				BEGIN(cmddone);
+				}
+
+<getdcbxver>force-cin		{ dcbx_version = dcbx_force_subtype1;
 				BEGIN(cmddone);
 				}
 
@@ -411,6 +430,13 @@ gp	{ if (!cmd) {
 				}
 
 <getappsubtype>:[fF][cC][oO][eE][ \\t]		{ appsubtype = 0;
+				if (cmd == CMD_SET_CONFIG)
+					BEGIN(getappargs);
+				else
+					BEGIN(cmddone);
+				}
+
+<getappsubtype>:[iI][sS][cC][sC][iI][ \\t]	{ appsubtype = 1;
 				if (cmd == CMD_SET_CONFIG)
 					BEGIN(getappargs);
 				else
@@ -947,6 +973,8 @@ int parse_dcb_cmd(char *buf)
 				break;
 			}
 
+			subtype = appsubtype;
+
 			if (!appcfg_p)
 				break;
 
@@ -956,6 +984,14 @@ int parse_dcb_cmd(char *buf)
 					if (!badarg)
 						badarg = strdup("invalid appcfg"
 							" length for FCoE");
+					error = 1;
+				}
+				break;
+			case APP_ISCSI_STYPE:
+				if (strlen(appcfg_p) != 2) {
+					if (!badarg)
+						badarg = strdup("invalid appcfg"
+							" length for iSCSI");
 					error = 1;
 				}
 				break;

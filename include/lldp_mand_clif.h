@@ -20,15 +20,14 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef _LLDP_MAND_CLIF_H
 #define _LLDP_MAND_CLIF_H
 
-#include "dcb_types.h"
+#include "lldp.h"
 
 struct lldp_module *mand_cli_register(void);
 void mand_cli_unregister(struct lldp_module *);
@@ -45,20 +44,16 @@ typedef enum {
 	cmd_version,
 	cmd_help,
 	cmd_ping,
-	cmd_if,
 	cmd_nop,
 } lldp_cmd;
 
 typedef enum {
-	op_enable    = 0x0001,
-	op_disable   = 0x0002,
-	op_add       = 0x0004,
-	op_remove    = 0x0008,
-	op_rx_enable = 0x0010,
-	op_tx_enable = 0x0020,
-	op_local     = 0x0040,
-	op_neighbor  = 0x0080,
-	op_arg       = 0x0100,
+	op_local     = 0x0001,
+	op_neighbor  = 0x0002,
+	op_arg       = 0x0004,
+	op_argval    = 0x0008,
+	op_config    = 0x0010,
+	op_delete    = 0x0020,
 } lldp_op;
 
 struct tlv {

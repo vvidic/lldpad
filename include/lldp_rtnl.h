@@ -20,15 +20,19 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#ifndef _LLDP_RTNL_H
 #define _LLDP_RTNL_H
-#include <linux/netlink.h>
 
-typedef int rtnl_handler(struct nlmsghdr *nh, void *arg);
+#ifndef IFNAMSIZ
+#define IFNAMSIZ 16
+#endif
 
+int get_operstate(char *ifname);
 int set_operstate(char *ifname, __u8 operstate);
-int set_linkmode(char *ifname, __u8 linkmode);
+int set_linkmode(const char *ifname, __u8 linkmode);
+
+#endif

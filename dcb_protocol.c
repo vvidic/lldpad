@@ -20,23 +20,29 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdlib.h>
+#include <stdio.h>
+#include <assert.h>
 #include <stdbool.h>
 #include <sys/queue.h>
+#include "lldp/ports.h"
+#include "dcb_types.h"
 #include "dcb_protocol.h"
 #include "dcb_driver_interface.h"
-#include "dcb_osdep.h"
 #include "dcb_persist_store.h"
 #include "dcb_rule_chk.h"
 #include "dcb_events.h"
 #include "messages.h"
 #include "lldp.h"
 #include "tlv_dcbx.h"
-#include <linux/if.h>
+#include "lldp_rtnl.h"
+#include "lldpad_shm.h"
+#include "linux/if.h"
+#include "linux/dcbnl.h"
 
 static void handle_opermode_true(char *device_name);
 u8        gdcbx_subtype = dcbx_subtype2;
@@ -111,7 +117,7 @@ struct pfc_store *pfc_find(struct pfchead *head, char *ifname)
 void pfc_insert(struct pfchead *head, char *ifname, pfc_attribs *store)
 {
 	struct pfc_store *entry;
-	entry = (struct pfc_store *)malloc(sizeof(struct pfc_store));
+	entry = (struct pfc_store *) malloc(sizeof(struct pfc_store));
 	if (!entry)
 		return;
 	strcpy(entry->ifname, ifname);
@@ -153,7 +159,7 @@ struct pg_desc_store *pgdesc_find(struct pgdesc_head *head, char *ifname)
 void pgdesc_insert(struct pgdesc_head *head, char *ifname, pg_info *store)
 {
 	struct pg_desc_store *entry;
-	entry = (struct pg_desc_store *)malloc(sizeof(struct pg_desc_store));
+	entry = (struct pg_desc_store *) malloc(sizeof(struct pg_desc_store));
 	if (!entry)
 		return;
 	strcpy(entry->ifname, ifname);
@@ -197,7 +203,7 @@ void apptlv_insert(struct apphead *head, char *ifname, u32 subtype,
 			app_attribs *store)
 {
 	struct app_store *entry;
-	entry = (struct app_store *)malloc(sizeof(struct app_store));
+	entry = (struct app_store *) malloc(sizeof(struct app_store));
 	if (!entry)
 		return;
 	strcpy(entry->ifname, ifname);
@@ -243,7 +249,7 @@ void llink_insert(struct llinkhead *head, char *ifname, llink_attribs *store,
 			u32 subtype)
 {
 	struct llink_store *entry;
-	entry = (struct llink_store *)malloc(sizeof(struct llink_store));
+	entry = (struct llink_store *) malloc(sizeof(struct llink_store));
 	if (!entry)
 		return;
 	strcpy(entry->ifname, ifname);
@@ -353,9 +359,6 @@ void features_erase(features_it *p)
 	*p = NULL;
 }
 
-int add_port(const char *device_name);
-int remove_port(const char *device_name);
-
 /* Add the store pointer to init_pg, i.e. memset store to 0,
  * then copy attribs to store
  */
@@ -367,7 +370,7 @@ void init_pg(pg_attribs *Attrib, pg_attribs *Store)
 	Attrib->protocol.State = DCB_INIT;
 	Attrib->protocol.Advertise_prev = false;
 	Attrib->protocol.tlv_sent = false;
-	Attrib->protocol.dcbx_st = gdcbx_subtype;
+	Attrib->protocol.dcbx_st = gdcbx_subtype & MASK_DCBX_FORCE;
 	memcpy(Store, Attrib, sizeof (*Attrib));
 }
 
@@ -378,13 +381,13 @@ bool add_pg(char *device_name, pg_attribs *Attrib)
 	if (it == NULL) {
 		/* Device not present: add */
 		pg_attribs *store =
-			(pg_attribs*)malloc(sizeof(*store));
-		if (!store) return false;
+			(pg_attribs*) malloc(sizeof(*store));
+		if (!store)
+			return false;
 
 		init_pg(Attrib, store);
 		pg_insert(&pg, device_name, store);
-	}
-	else {  /* already in data store, just update it */
+	} else {  /* already in data store, just update it */
 		it->second->protocol.Advertise_prev =
 				(*it).second->protocol.Advertise;
 		it->second->protocol.Advertise = Attrib->protocol.Advertise;
@@ -404,9 +407,10 @@ void init_oper_pg(pg_attribs *Attrib)
 	memset(Attrib,0,sizeof(*Attrib));
 	snprintf(sTmp, MAX_DESCRIPTION_LEN, DEF_CFG_STORE);
 	pg_it itpg = pg_find(&pg, sTmp);
-	if (itpg == NULL) {
+
+	if (itpg == NULL)
 		return;
-	}
+
 	memcpy(&(Attrib->rx), &(itpg->second->rx), sizeof(Attrib->rx));
 	memcpy(&(Attrib->tx), &(itpg->second->tx), sizeof(Attrib->tx));
 }
@@ -417,9 +421,10 @@ bool add_oper_pg(char *device_name)
 	if (it == NULL) {
 		/* Device not present: add */
 		pg_attribs *store =
-			(pg_attribs*)malloc(sizeof(*store));
+			(pg_attribs*) malloc(sizeof(*store));
 
-		if (!store) return false;
+		if (!store)
+			return false;
 
 		init_oper_pg( store);
 		pg_insert(&oper_pg, device_name, store);
@@ -438,9 +443,10 @@ bool add_peer_pg(char *device_name)
 	pg_it it = pg_find(&peer_pg, device_name);
 	if (it == NULL) {
 		/* Device not present: add */
-		pg_attribs *store = (pg_attribs*)malloc(sizeof(*store));
+		pg_attribs *store = (pg_attribs*) malloc(sizeof(*store));
 
-		if (!store) return false;
+		if (!store)
+			return false;
 
 		init_peer_pg( store);
 		pg_insert(&peer_pg, device_name, store);
@@ -455,8 +461,28 @@ void init_apptlv(app_attribs *Attrib, app_attribs *Store)
 	Attrib->protocol.State           = DCB_INIT;
 	Attrib->protocol.Advertise_prev  = false;
 	Attrib->protocol.tlv_sent        = false;
-	Attrib->protocol.dcbx_st         = gdcbx_subtype;
+	Attrib->protocol.dcbx_st         = gdcbx_subtype & MASK_DCBX_FORCE;
 	memcpy(Store, Attrib, sizeof (*Attrib));
+}
+
+bool valid_subtype(dcbx_state *state, u32 Subtype)
+{
+
+	if (state == NULL)
+		return 0;
+
+	switch (Subtype) {
+
+	case APP_FCOE_STYPE:
+		return state->FCoEenable;
+
+	case APP_ISCSI_STYPE:
+		return state->iSCSIenable;
+
+	default:
+		return 0;
+
+	}
 }
 
 bool add_apptlv(char *device_name, app_attribs *Attrib, u32 Subtype,
@@ -467,15 +493,15 @@ bool add_apptlv(char *device_name, app_attribs *Attrib, u32 Subtype,
 	/* If FCoE is enabled in the DCBX state record,
 	 * then enable the FCoE App object and persist the change.
 	*/
-	if (state && Subtype == APP_FCOE_STYPE && state->FCoEenable &&
-		!Attrib->protocol.Enable) {
+	if (valid_subtype(state, Subtype) && !Attrib->protocol.Enable) {
 		Attrib->protocol.Enable = true;
 		memset(&attr_ptr, 0, sizeof(attr_ptr));
 		attr_ptr.app = Attrib;
 		attr_ptr.app_subtype = (u8)Subtype;
 		if (set_persistent(device_name, &attr_ptr) !=
 			dcb_success) {
-			printf("Set persistent failed in add_apptlv\n");
+			LLDPAD_DBG("Set persistent failed in add_apptlv, "
+				   " subtype: %d\n", Subtype);
 			return false;
 		}
 	}
@@ -572,7 +598,10 @@ bool add_control_protocol(char *device_name, dcbx_state *state)
 
 		init_control_prot(store, state);
 		ctrl_prot_insert(&dcb_control_prot, device_name, store);
+	} else if (get_operstate(device_name) == IF_OPER_DORMANT) {
+		init_control_prot(it->second, state);
 	}
+
 	return true;
 }
 
@@ -609,7 +638,7 @@ void init_pfc(pfc_attribs *Attrib, pfc_attribs *Store)
 	Attrib->protocol.State = DCB_INIT;
 	Attrib->protocol.Advertise_prev = false;
 	Attrib->protocol.tlv_sent = false;
-	Attrib->protocol.dcbx_st = gdcbx_subtype;
+	Attrib->protocol.dcbx_st = gdcbx_subtype & MASK_DCBX_FORCE;
 	memcpy(Store, Attrib, sizeof(*Attrib));
 }
 
@@ -644,9 +673,10 @@ void init_oper_pfc(pfc_attribs *Attrib)
 	memset(Attrib,0,sizeof(*Attrib));
 	snprintf(sTmp, MAX_DESCRIPTION_LEN, DEF_CFG_STORE);
 	pfc_it itpfc = pfc_find(&oper_pfc, sTmp);
-	if (itpfc == NULL) {
+
+	if (itpfc == NULL)
 		return;
-	}
+
 	memcpy(&(Attrib->admin), &(itpfc->second->admin), sizeof(Attrib->admin));
 }
 
@@ -720,7 +750,7 @@ void init_llink(llink_attribs *Attrib, llink_attribs *Store)
 	Attrib->protocol.State = DCB_INIT;
 	Attrib->protocol.Advertise_prev = false;
 	Attrib->protocol.tlv_sent = false;
-	Attrib->protocol.dcbx_st = gdcbx_subtype;
+	Attrib->protocol.dcbx_st = gdcbx_subtype & MASK_DCBX_FORCE;
 	memcpy(Store, Attrib, sizeof(*Attrib));
 }
 
@@ -753,9 +783,9 @@ void init_oper_llink(llink_attribs *Attrib, u32 subtype)
 	memset(Attrib,0,sizeof(*Attrib));
 
 	llink_it itllink = llink_find(&oper_llink, DEF_CFG_STORE, subtype);
-	if (itllink == NULL) {
+	if (itllink == NULL)
 		return;
-	}
+
 	memcpy(&(Attrib->llink), &(itllink->second->llink),
 			sizeof(Attrib->llink));
 }
@@ -801,9 +831,8 @@ bool init_dcb_support(char *device_name, full_dcb_attribs *attrib)
 	feature_support dcb_support;
 
 	memset(&dcb_support, 0, sizeof(feature_support));
-	if (get_dcb_capabilities(device_name, &dcb_support) != 0) {
+	if (get_dcb_capabilities(device_name, &dcb_support) != 0)
 		return false;
-	}
 
 	/*if (!dcb_support.pg) {
 	 *    attrib->pg.protocol.Enable = false;
@@ -880,8 +909,8 @@ void remove_dcb_support(void)
 int dcbx_add_adapter(char *device_name)
 {
 	u32 EventFlag = 0;
-	full_dcb_attrib_ptrs  attr_ptr;
-	full_dcb_attribs      attribs;
+	full_dcb_attrib_ptrs attr_ptr;
+	full_dcb_attribs attribs;
 	feature_support dcb_support = {0};
 	dcb_result sResult = dcb_success;
 	dcbx_state state;
@@ -890,205 +919,176 @@ int dcbx_add_adapter(char *device_name)
 	memset(&attribs, 0, sizeof(attribs));
 
 	if ((sResult = get_persistent(device_name, &attribs)) != dcb_success) {
-		printf("get_persistent returned error %d\n", sResult);
+		LLDPAD_DBG("get_persistent returned error %d\n", sResult);
 		sResult = dcb_failed;
 		goto add_adapter_error;
 	}
 
-	printf("  dcbx subtype = %d\n", gdcbx_subtype);
+	LLDPAD_DBG("  dcbx subtype = %d\n", gdcbx_subtype);
 
 	memset (&attr_ptr, 0, sizeof(attr_ptr));
 	attr_ptr.pg = &(attribs.pg);
-	if ((sResult = dcb_check_config(&attr_ptr)) != dcb_success) {
-		printf("Rule checker returned error %d\n", sResult);
-	} else { /* big else */
-		memset(&state, 0, sizeof(state));
-		get_dcbx_state(device_name, &state);
+	attr_ptr.pfc = &(attribs.pfc);
 
-		/* Create data stores for the device. */
-		if (!init_dcb_support(device_name, &attribs)) {
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
+	memset(&state, 0, sizeof(state));
+	get_dcbx_state(device_name, &state);
 
-		if (!add_pg(device_name, &attribs.pg)) {
-			log_message(MSG_ERR_RESOURCE_MEMORY, "%s",device_name);
-			printf("add_pg error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-		if (!add_pfc(device_name, &attribs.pfc)) {
-			log_message(MSG_ERR_RESOURCE_MEMORY, "%s",device_name);
-			printf("add_pfc error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-		if (!add_bwg_desc(device_name, &attribs.descript)) {
-			log_message(MSG_ERR_RESOURCE_MEMORY, "%s",device_name);
-			printf("add_bwg_desc error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-		if (!add_control_protocol(device_name, &state)) {
-			log_message(MSG_ERR_RESOURCE_MEMORY, "%s",device_name);
-			printf("add_control_protocol error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-		if (!add_peer_pg(device_name)) {
-			log_message(MSG_ERR_RESOURCE_MEMORY, "%s",device_name);
-			printf("add_peer_pg error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-		if (!add_peer_pfc(device_name)) {
-			log_message(MSG_ERR_RESOURCE_MEMORY, "%s",device_name);
-			printf("add_peer_pfc error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-		if (!add_peer_control_protocol(device_name)) {
-			log_message(MSG_ERR_RESOURCE_MEMORY, "%s",device_name);
-			printf("add_peer_control_protocol error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-		if (!add_oper_pg(device_name)) {
-			log_message(MSG_ERR_RESOURCE_MEMORY, "%s",device_name);
-			printf("add_oper_pg error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-		if (!add_oper_pfc(device_name)) {
-			log_message(MSG_ERR_RESOURCE_MEMORY, "%s",device_name);
-			printf("add_oper_pfc error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-		/* Add APPTLV for supported Subtypes. */
-		for(i = 0; i < DCB_MAX_APPTLV ; i++) {
-			if (!add_apptlv(device_name,
-				&attribs.app[i], i, &state)) {
-				log_message(MSG_ERR_RESOURCE_MEMORY, "%s",
-					device_name);
-				printf("add_apptlv error.\n");
-				sResult = dcb_failed;
-				goto add_adapter_error;
-			}
-			if (!add_oper_apptlv(device_name, i)) {
-				log_message(MSG_ERR_RESOURCE_MEMORY, "%s",
-					device_name);
-				printf("add_oper_apptlv error.\n");
-				sResult = dcb_failed;
-				goto add_adapter_error;
-			}
-			if (!add_peer_apptlv(device_name, i)) {
-				log_message(MSG_ERR_RESOURCE_MEMORY, "%s",
-					device_name);
-				printf("add_peer_apptlv error.\n");
-				sResult = dcb_failed;
-				goto add_adapter_error;
-			}
-		}
-		for(i = 0; i < DCB_MAX_LLKTLV ; i++) {
-			if (!add_llink(device_name, &attribs.llink[i], i)) {
-				log_message(MSG_ERR_RESOURCE_MEMORY, "%s",
-					device_name);
-				printf("add_llink error.\n");
-				sResult = dcb_failed;
-				goto add_adapter_error;
-			}
-			if (!add_oper_llink(device_name, i)) {
-				log_message(MSG_ERR_RESOURCE_MEMORY, "%s",
-					device_name);
-				printf("add_oper_llink error.\n");
-				sResult = dcb_failed;
-				goto add_adapter_error;
-			}
-			if (!add_peer_llink(device_name, i)) {
-				log_message(MSG_ERR_RESOURCE_MEMORY, "%s",
-					device_name);
-				printf("add_peer_llink error.\n");
-				sResult = dcb_failed;
-				goto add_adapter_error;
-			}
-		}
+	/* Create data stores for the device. */
+	if (!init_dcb_support(device_name, &attribs)) {
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
 
-		if (get_dcb_support(device_name, &dcb_support) != dcb_success) {
+	sResult = dcb_check_config(&attr_ptr);
+	if (sResult != dcb_success)
+		LLDPAD_WARN("Rule checker returned error %d\n", sResult);
+
+	if (!add_pg(device_name, &attribs.pg)) {
+		LLDPAD_DBG("add_pg error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	if (!add_pfc(device_name, &attribs.pfc)) {
+		LLDPAD_DBG("add_pfc error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	if (!add_bwg_desc(device_name, &attribs.descript)) {
+		LLDPAD_DBG("add_bwg_desc error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	if (!add_control_protocol(device_name, &state)) {
+		LLDPAD_DBG("add_control_protocol error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	if (!add_peer_pg(device_name)) {
+		LLDPAD_DBG("add_peer_pg error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	if (!add_peer_pfc(device_name)) {
+		LLDPAD_DBG("add_peer_pfc error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	if (!add_peer_control_protocol(device_name)) {
+		LLDPAD_DBG("add_peer_control_protocol error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	if (!add_oper_pg(device_name)) {
+		LLDPAD_DBG("add_oper_pg error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	if (!add_oper_pfc(device_name)) {
+		LLDPAD_DBG("add_oper_pfc error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	/* Add APPTLV for supported Subtypes. */
+	for (i = 0; i < DCB_MAX_APPTLV; i++) {
+		if (!add_apptlv(device_name,
+			&attribs.app[i], i, &state)) {
+			LLDPAD_DBG("add_apptlv error.\n");
 			sResult = dcb_failed;
 			goto add_adapter_error;
 		}
+		if (!add_oper_apptlv(device_name, i)) {
+			LLDPAD_DBG("add_oper_apptlv error.\n");
+			sResult = dcb_failed;
+			goto add_adapter_error;
+		}
+		if (!add_peer_apptlv(device_name, i)) {
+			LLDPAD_DBG("add_peer_apptlv error.\n");
+			sResult = dcb_failed;
+			goto add_adapter_error;
+		}
+	}
+	for (i = 0; i < DCB_MAX_LLKTLV; i++) {
+		if (!add_llink(device_name, &attribs.llink[i], i)) {
+			LLDPAD_DBG("%s add_llink error.\n",
+				    device_name);
+			sResult = dcb_failed;
+			goto add_adapter_error;
+		}
+		if (!add_oper_llink(device_name, i)) {
+			LLDPAD_DBG("add_oper_llink error.\n");
+			sResult = dcb_failed;
+			goto add_adapter_error;
+		}
+		if (!add_peer_llink(device_name, i)) {
+			LLDPAD_DBG("add_peer_llink error.\n");
+			sResult = dcb_failed;
+			goto add_adapter_error;
+		}
+	}
 
-		/* Initialize features state machines for PG and PFC and
-		 * APPTLVs. */
+	if (get_dcb_support(device_name, &dcb_support) != dcb_success) {
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+
+
+	/* Initialize features state machines for PG and PFC and
+	 * APPTLVs. */
+	if (run_feature_protocol(device_name,
+		DCB_LOCAL_CHANGE_PG, SUBTYPE_DEFAULT) !=
+		dcb_success) {
+		LLDPAD_DBG("run_feature_protocol error (PG)\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	if (run_feature_protocol(device_name,
+		DCB_LOCAL_CHANGE_PFC, SUBTYPE_DEFAULT) != dcb_success) {
+		LLDPAD_DBG("run_feature_protocol error (PFC)\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+	/* If APPTLV subtypes are supported then run the
+	 * feat_prot for those supported subtypes. */
+	for (i = 0; i < DCB_MAX_APPTLV ; i++) {
 		if (run_feature_protocol(device_name,
-			DCB_LOCAL_CHANGE_PG, SUBTYPE_DEFAULT) !=
+			DCB_LOCAL_CHANGE_APPTLV(i), i) !=
 			dcb_success) {
-			printf("run_feature_protocol error (PG)\n");
+			LLDPAD_DBG("run_feature_protocol error (APP)\n");
 			sResult = dcb_failed;
 			goto add_adapter_error;
 		}
+	}
+	for (i = 0; i < DCB_MAX_LLKTLV ; i++) {
 		if (run_feature_protocol(device_name,
-			DCB_LOCAL_CHANGE_PFC, SUBTYPE_DEFAULT) != dcb_success) {
-			printf("run_feature_protocol error (PFC)\n");
+			DCB_LOCAL_CHANGE_LLINK, i) != dcb_success) {
+			LLDPAD_DBG("run_feature_protocol error (LLINK)\n");
 			sResult = dcb_failed;
 			goto add_adapter_error;
 		}
-		/* If APPTLV subtypes are supported then run the
-		 * feat_prot for those supported subtypes. */
-		for (i = 0; i < DCB_MAX_APPTLV ; i++) {
-			if (run_feature_protocol(device_name,
-				DCB_LOCAL_CHANGE_APPTLV, i) !=
-				dcb_success) {
-				printf("run_feature_protocol error (APP)\n");
-				sResult = dcb_failed;
-				goto add_adapter_error;
-			}
-		}
-		for (i = 0; i < DCB_MAX_LLKTLV ; i++) {
-			if (run_feature_protocol(device_name,
-				DCB_LOCAL_CHANGE_LLINK, i) != dcb_success) {
-				printf("run_feature_protocol error (LLINK)\n");
-				sResult = dcb_failed;
-				goto add_adapter_error;
-			}
-		}
+	}
 
-		EventFlag = 0;
-		DCB_SET_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PG |
-			DCB_LOCAL_CHANGE_PFC| DCB_LOCAL_CHANGE_APPTLV);
-		DCB_SET_FLAGS(EventFlag, DCB_LOCAL_CHANGE_LLINK);
-		/* Initialize control state machine */
-		if (run_control_protocol (device_name, EventFlag) !=
-			dcb_success) {
-			printf("run_control_protocol error.\n");
-			sResult = dcb_failed;
-			goto add_adapter_error;
-		}
-	}	/* big else on top */
+	EventFlag = 0;
+	DCB_SET_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PG |
+	DCB_LOCAL_CHANGE_PFC | DCB_LOCAL_CHANGE_LLINK);
+	for (i = 0; i < DCB_MAX_APPTLV; i++)
+		DCB_SET_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV(i));
+	/* Initialize control state machine */
+	if (run_control_protocol(device_name, EventFlag) !=
+		dcb_success) {
+		LLDPAD_DBG("run_control_protocol error.\n");
+		sResult = dcb_failed;
+		goto add_adapter_error;
+	}
+
 
 
 add_adapter_error:
 	if (sResult != dcb_success) {
-		printf("add_adapter: Service unable to use network adapter\n");
-		log_message(MSG_ERR_ADD_CARD_FAILURE, "%s", device_name);
+		LLDPAD_DBG("add_adapter: Service unable to use network adapter\n");
 		return false;
 	}
 
 	return true;
-}
-
-int add_adapter(char *device_name)
-{
-	LLDPAD_DBG("%s:%s\n", __func__, device_name);
-
-	if (add_port(device_name) < 0) {
-		LLDPAD_ERR("%s:%s: failed\n", __func__, device_name);
-		log_message(MSG_ERR_ADD_CARD_FAILURE, "%s", device_name);
-		return -1;
-	}
-
-	return 0;
 }
 
 int dcbx_remove_adapter(char *device_name)
@@ -1108,11 +1108,11 @@ int dcbx_remove_adapter(char *device_name)
 
 	features_it itfeat = features_find(&feature_struct, devName);
 	if (itfeat != NULL) {
-		printf("free: dcb support %p\n", itp);
+		LLDPAD_DBG("free: dcb support %p\n", itp);
 		features_erase(&itfeat);
 
 	} else {
-		printf("remove_adapter: dcb support not found\n");
+		LLDPAD_DBG("remove_adapter: dcb support not found\n");
 	}
 
 	pg_it itpg = pg_find(&pg, devName);
@@ -1120,67 +1120,67 @@ int dcbx_remove_adapter(char *device_name)
 		/* this line frees the param of this function! */
 		pg_erase(&itpg);
 	} else {
-		printf("remove_adapter: pg not found\n");
+		LLDPAD_DBG("remove_adapter: pg not found\n");
 	}
 
 	pfc_it itpfc = pfc_find(&pfc,devName);
 	if (itpfc != NULL) {
 		pfc_erase(&itpfc);
 	} else {
-		printf("remove_adapter: pfc not found\n");
+		LLDPAD_DBG("remove_adapter: pfc not found\n");
 	}
 
 	pg_desc_it itbwg = pgdesc_find(&pg_desc, devName);
 	if (itbwg != NULL) {
 		pgdesc_erase(&itbwg);
 	} else if (not_default) {
-		printf("remove_adapter: pgid not found\n");
+		LLDPAD_DBG("remove_adapter: pgid not found\n");
 	}
 
 	control_prot_it itcp = ctrl_prot_find(&dcb_control_prot, devName);
 	if (itcp != NULL) {
 		ctrl_prot_erase(&itcp);
 	} else if (not_default) {
-		printf("remove_adapter: ctrl not found\n");
+		LLDPAD_DBG("remove_adapter: ctrl not found\n");
 	}
 
 	pg_it itprpg = pg_find(&peer_pg, devName);
 	if (itprpg != NULL) {
 		pg_erase(&itprpg);
 	} else if (not_default) {
-		printf("remove_adapter: peer pg not found\n");
+		LLDPAD_DBG("remove_adapter: peer pg not found\n");
 	}
 
 	pfc_it itprpfc = pfc_find(&peer_pfc, devName);
 	if (itprpfc != NULL) {
 		pfc_erase(&itprpfc);
 	} else if (not_default) {
-		printf("remove_adapter: peer pfc not found\n");
+		LLDPAD_DBG("remove_adapter: peer pfc not found\n");
 	}
 
 	control_prot_it itpcp = ctrl_prot_find(&dcb_peer_control_prot, devName);
 	if (itpcp != NULL) {
 		ctrl_prot_erase(&itpcp);
 	} else if (not_default) {
-		printf("remove_adapter: peer ctrl not found\n");
+		LLDPAD_DBG("remove_adapter: peer ctrl not found\n");
 	}
 
 	pg_it itopg = pg_find(&oper_pg, devName);
 	if (itopg != NULL) {
 		pg_erase(&itopg);
 	} else if (not_default) {
-		printf("remove_adapter: oper pg not found\n");
+		LLDPAD_DBG("remove_adapter: oper pg not found\n");
 	}
 
 	pfc_it itopfc = pfc_find(&oper_pfc, devName);
 	if (itopfc != NULL) {
 		pfc_erase(&itopfc);
 	} else if (not_default) {
-		printf("remove_adapter: oper pfc not found\n");
+		LLDPAD_DBG("remove_adapter: oper pfc not found\n");
 	}
 
 	/* Get the APP TLV  and erase. */
-	for(i = 0; i < DCB_MAX_APPTLV ; i++) {
+	for (i = 0; i < DCB_MAX_APPTLV ; i++) {
 		app_it itapp = apptlv_find(&apptlv, devName, i);
 		if (itapp != NULL)
 			apptlv_erase(&itapp);
@@ -1193,60 +1193,30 @@ int dcbx_remove_adapter(char *device_name)
 		if (itapp != NULL)
 			apptlv_erase(&itapp);
 	}
-	for(i = 0; i < DCB_MAX_LLKTLV ; i++) {
+	for (i = 0; i < DCB_MAX_LLKTLV ; i++) {
 		/* Release LLINK data store */
 		llink_it itllink = llink_find(&llink, devName, i);
-		if (itllink != NULL) {
+		if (itllink != NULL)
 			llink_erase(&itllink);
-		} else {
-			printf("remove_adapter: llink not found\n");
-		}
+		else
+			LLDPAD_DBG("remove_adapter: llink not found\n");
 
 		llink_it itprllink = llink_find(&peer_llink, devName, i);
-		if (itprllink != NULL) {
+		if (itprllink != NULL)
 			llink_erase(&itprllink);
-		} else if (not_default) {
-			printf("remove_adapter: peer llink not found\n");
-		}
+		else if (not_default)
+			LLDPAD_DBG("remove_adapter: peer llink not found\n");
 
 		llink_it itollink = llink_find(&oper_llink, devName, i);
-		if (itollink != NULL) {
+		if (itollink != NULL)
 			llink_erase(&itollink);
-		} else if (not_default) {
-			printf("remove_adapter: oper llink not found\n");
-		}
+		else if (not_default)
+			LLDPAD_DBG("remove_adapter: oper llink not found\n");
 	}
+
+	lldpad_shm_set_dcbx(device_name, dcbx_subtype0);
 	return true;
 }
-
-int remove_adapter(char *device_name)
-{
-	/* NOTE: the parameter "device_name" is freed during this routine
-	 * and must not be used after it is copied*/
-	char devName[MAX_DEVICE_NAME_LEN]; /* local copy of device_name */
-	int       not_default = 1;
-
-	/* save device name for remove port */
-	if (device_name == NULL) {
-		printf("remove_adapter: null device\n");
-		return -1;
-	}
-
-	not_default = memcmp(DEF_CFG_STORE, device_name,
-		strlen(DEF_CFG_STORE));
-
-	strncpy(devName, device_name, MAX_DEVICE_NAME_LEN);
-
-	if (not_default) {
-		set_linkmode(device_name, 0);
-		if (remove_port(devName) < 0) {
-			printf("remove_port: failed\n");
-			return -1;
-		}
-	}
-	return 0;
-}
-
 
 dcb_result save_dcbx_state(const char *device_name)
 {
@@ -1266,11 +1236,44 @@ dcb_result save_dcbx_state(const char *device_name)
 		state.FCoEenable = app_data.protocol.Enable;
 	else
 		return dcb_bad_params;
+	if (get_app((char*)device_name, 1, &app_data) == dcb_success)
+		state.iSCSIenable = app_data.protocol.Enable;
+	else
+		return dcb_bad_params;
 
 	if (set_dcbx_state(device_name, &state))
 		return dcb_success;
 	else
 		return dcb_failed;
+}
+
+static int dcbx_free_app_config(char *device_name)
+{
+	app_it Oper, Local;
+	appgroup_attribs app_data;
+
+	/* Free FCoE APP data */
+	Oper = apptlv_find(&oper_apptlv, device_name, APP_FCOE_STYPE);
+	Local = apptlv_find(&apptlv, device_name, APP_FCOE_STYPE);
+	if (Oper || Local) {
+		app_data.dcb_app_idtype = DCB_APP_IDTYPE_ETHTYPE;
+		app_data.dcb_app_id = APP_FCOE_ETHTYPE;
+		app_data.dcb_app_priority = 0;
+		set_hw_app(device_name, &app_data);
+	}
+
+	/* Free iSCSI APP data */
+	Oper = apptlv_find(&oper_apptlv, device_name, APP_ISCSI_STYPE);
+	Local = apptlv_find(&apptlv, device_name, APP_ISCSI_STYPE);
+	if (Oper || Local) {
+		app_data.dcb_app_idtype = DCB_APP_IDTYPE_PORTNUM;
+		app_data.dcb_app_id = APP_ISCSI_PORT;
+		app_data.dcb_app_priority = 0;
+
+		set_hw_app(device_name, &app_data);
+	}
+
+	return 0;
 }
 
 int dcbx_remove_all(void)
@@ -1288,12 +1291,15 @@ int dcbx_remove_all(void)
 
 		save_dcbx_state(it->ifname);
 
+		/* Remove kernel APP entries */
+		dcbx_free_app_config(it->ifname);
+
 		/* prepare sTmp in case of error */
 		snprintf(sTmp, MAX_DEVICE_NAME_LEN*2, /* Localization OK */
 			"Remove_all_adapters error: Bad device name: %.*s\n",
 			MAX_DEVICE_NAME_LEN, it->ifname);
-		if (remove_adapter((char *) (it->ifname)) < 0)
-			printf(sTmp);
+		if (remove_port((char *) (it->ifname)) < 0)
+			LLDPAD_DBG(sTmp);
 	}
 
 	return 0;
@@ -1302,22 +1308,13 @@ int dcbx_remove_all(void)
 /* Function to find all the dcb devices from store and remove them. */
 void remove_all_adapters()
 {
-	char sTmp[MAX_DEVICE_NAME_LEN*2];
 	struct port *port, *p;
 
 	port = porthead;
 	while (port != NULL) {
 		p = port;
 		port = port->next;
-		remove_adapter(p->ifname);
-	}
-
-	/* the default attributes object needs to be removed last */
-	if (remove_adapter(DEF_CFG_STORE) < 0) {
-		snprintf(sTmp, MAX_DEVICE_NAME_LEN*2,
-			 "Remove_all_adapters error: Bad device name: %.*s\n",
-			 MAX_DEVICE_NAME_LEN, DEF_CFG_STORE);
-		printf("%s", sTmp);
+		remove_port(p->ifname);
 	}
 
 	return;
@@ -1325,10 +1322,10 @@ void remove_all_adapters()
 
 bool add_pg_defaults()
 {
-	pg_attribs  pg_data;
-	char        sTmp[MAX_DESCRIPTION_LEN];
-	bool   result = true;
-	int         index, portion, rmndr, temp;
+	pg_attribs pg_data;
+	char sTmp[MAX_DESCRIPTION_LEN];
+	bool result = true;
+	int index, portion, rmndr, temp;
 
 	/* todo:  - must be a better way and place to do this */
 	if (pg_not_initted) {
@@ -1387,21 +1384,6 @@ bool add_pg_defaults()
 	return result;
 }
 
-bool remove_pg_defaults()
-{
-	char   sTmp[MAX_DESCRIPTION_LEN];
-
-	snprintf(sTmp, MAX_DESCRIPTION_LEN, DEF_CFG_STORE);
-	pg_it itpg = pg_find(&pg, sTmp);
-	if (itpg == NULL)
-		return false;
-
-	/* erase and free memory */
-	pg_erase(&itpg);
-
-	return true;
-}
-
 bool add_pfc_defaults()
 {
 	pfc_attribs pfc_data;
@@ -1423,9 +1405,8 @@ bool add_pfc_defaults()
 	pfc_data.protocol.Willing = 1;
 	pfc_data.protocol.Advertise = 1;
 
-	for (index=0; index < MAX_TRAFFIC_CLASSES; index++) {
+	for (index=0; index < MAX_TRAFFIC_CLASSES; index++)
 		pfc_data.admin[index] = pfc_disabled;
-	}
 
 	snprintf(sTmp, MAX_DESCRIPTION_LEN, DEF_CFG_STORE);
 	/* Create pfc default data store for the device. */
@@ -1433,22 +1414,6 @@ bool add_pfc_defaults()
 		result = false;
 
 	return result;
-}
-
-bool remove_pfc_defaults()
-{
-	char   sTmp[MAX_DESCRIPTION_LEN];
-
-	snprintf(sTmp, MAX_DESCRIPTION_LEN, DEF_CFG_STORE);
-	pfc_it itpfc = pfc_find(&pfc, sTmp);
-	if (itpfc == NULL) {
-		return false;
-	}
-
-	/* erase and free memory */
-	pfc_erase(&itpfc);
-
-	return true;
 }
 
 bool add_app_defaults(u32 subtype)
@@ -1465,7 +1430,7 @@ bool add_app_defaults(u32 subtype)
 		app_not_initted = false;
 	}
 
-	memset (&app_data, 0, sizeof(app_attribs));
+	memset(&app_data, 0, sizeof(app_attribs));
 
 	app_data.protocol.Enable = 0;
 	app_data.protocol.Willing = 1;
@@ -1476,7 +1441,11 @@ bool add_app_defaults(u32 subtype)
 	switch (subtype) {
 	case APP_FCOE_STYPE:  /* FCoE subtype */
 		app_data.Length = 1;
-		app_data.AppData[0] = 0x08; /* bit pattern: User Priority 3 */
+		app_data.AppData[0] = APP_FCOE_DEFAULT_DATA;
+		break;
+	case APP_ISCSI_STYPE:  /* iSCSI subtype */
+		app_data.Length = 1;
+		app_data.AppData[0] = APP_ISCSI_DEFAULT_DATA;
 		break;
 	default:
 		break;
@@ -1489,29 +1458,11 @@ bool add_app_defaults(u32 subtype)
 	return result;
 }
 
-bool remove_app_defaults(u32 subtype)
-{
-	char   sTmp[MAX_DESCRIPTION_LEN];
-
-	snprintf(sTmp, MAX_DESCRIPTION_LEN, "%s",   /* Localization OK */
-			 DEF_CFG_STORE);
-	app_it it = apptlv_find(&apptlv, sTmp, subtype);
-
-	if (it == NULL) {
-		return false;
-	}
-
-	/* erase and free memory */
-	apptlv_erase(&it);
-
-	return true;
-}
-
 bool add_llink_defaults(u32 subtype)
 {
 	llink_attribs llink_data;
-	char          sTmp[MAX_DESCRIPTION_LEN];
-	bool     result = true;
+	char sTmp[MAX_DESCRIPTION_LEN];
+	bool result = true;
 
 	/* todo:  - must be a better way and place to do this */
 	if (llink_not_initted) {
@@ -1521,7 +1472,7 @@ bool add_llink_defaults(u32 subtype)
 		llink_not_initted = false;
 	}
 
-	memset (&llink_data, 0, sizeof(llink_attribs));
+	memset(&llink_data, 0, sizeof(llink_attribs));
 
 	llink_data.protocol.Enable = 1;
 	llink_data.protocol.Willing = 1;
@@ -1536,23 +1487,6 @@ bool add_llink_defaults(u32 subtype)
 	return result;
 }
 
-bool remove_llink_defaults(u32 subtype)
-{
-	char   sTmp[MAX_DESCRIPTION_LEN];
-
-	snprintf(sTmp, MAX_DESCRIPTION_LEN, "%s",   /* Localization OK */
-			 DEF_CFG_STORE);
-	llink_it itllink = llink_find(&llink, sTmp, subtype);
-	if (itllink == NULL) {
-		return false;
-	}
-
-	/* erase and free memory */
-	llink_erase(&itllink);
-
-	return true;
-}
-
 dcb_result get_pg(char *device_name,  pg_attribs *pg_data)
 {
 	dcb_result result = dcb_success;
@@ -1565,8 +1499,7 @@ dcb_result get_pg(char *device_name,  pg_attribs *pg_data)
 	pg_it it = pg_find(&pg, device_name);
 	if (it != NULL) {
 		memcpy(pg_data, it->second, sizeof(*pg_data));
-	}
-	else {
+	} else {
 		result = get_persistent(device_name, &attribs);
 		if (result == dcb_success)
 			memcpy(pg_data, &attribs.pg, sizeof(*pg_data));
@@ -1574,16 +1507,6 @@ dcb_result get_pg(char *device_name,  pg_attribs *pg_data)
 			result = dcb_device_not_found;
 	}
 	return result;
-}
-
-dcb_result test_device_dstore(char *device_name)
-{
-	pg_it it = pg_find(&pg, device_name);
-	if (it != NULL) {
-		return dcb_success;
-	} else {
-		return dcb_device_not_found;
-	}
 }
 
 dcb_result get_oper_pg(char *device_name,  pg_attribs *pg_data)
@@ -1606,12 +1529,13 @@ dcb_result get_peer_pg(char *device_name,  pg_attribs *pg_data)
 
 	if (!pg_data)
 		return dcb_bad_params;
+
 	pg_it it = pg_find(&peer_pg, device_name);
-	if (it != NULL) {
+
+	if (it != NULL)
 		memcpy(pg_data, it->second, sizeof(*pg_data));
-	} else {
+	else
 		result = dcb_device_not_found;
-	}
 
 	return result;
 }
@@ -1632,9 +1556,14 @@ void mark_pfc_sent(char *device_name)
 
 void mark_app_sent(char *device_name, u32 subtype)
 {
-	app_it it = apptlv_find(&apptlv, device_name, subtype);
-	if (it != NULL)
-		it->second->protocol.tlv_sent = true;
+	app_it it;
+	int i;
+
+	for (i = 0; i < DCB_MAX_APPTLV; i++) {
+		it = apptlv_find(&apptlv, device_name, i);
+		if (it != NULL)
+			it->second->protocol.tlv_sent = true;
+	}
 }
 
 void mark_llink_sent(char *device_name, u32 subtype)
@@ -1644,13 +1573,12 @@ void mark_llink_sent(char *device_name, u32 subtype)
 		it->second->protocol.tlv_sent = true;
 }
 
-dcb_result put_pg(char *device_name,  pg_attribs *pg_data)
+dcb_result put_pg(char *device_name, pg_attribs *pg_data, pfc_attribs *pfc_data)
 {
-	full_dcb_attribs     attribs;
-	full_dcb_attrib_ptrs attr_ptr;
-	u32                  EventFlag = 0;
-	dcb_result           result = dcb_success;
-	bool            bChange = false;
+	full_dcb_attribs 	attribs;
+	full_dcb_attrib_ptrs	attr_ptr;
+	u32 			EventFlag = 0;
+	dcb_result		result = dcb_success;
 
 	if (!pg_data)
 		return dcb_bad_params;
@@ -1661,31 +1589,32 @@ dcb_result put_pg(char *device_name,  pg_attribs *pg_data)
 		/* Lock the data first */
 
 		/* detect no config change */
-		if (memcmp(it->second, pg_data, sizeof(*pg_data)) == 0) {
+		if (memcmp(it->second, pg_data, sizeof(*pg_data)) == 0)
 			goto Exit;
-		}
 
 		/* Check the rules */
 		memset(&attr_ptr, 0, sizeof(attr_ptr));
 		attr_ptr.pg = pg_data;
+		attr_ptr.pfc = pfc_data;
+
 		if (dcb_check_config(&attr_ptr) != dcb_success) {
-			printf("Rule checking failed in put_pg()\n");
+			LLDPAD_DBG("Rule checking failed in put_pg()\n");
 			result = dcb_bad_params;
 			goto Exit;
 		}
-		bChange = true;
-		if (set_persistent(device_name, &attr_ptr) !=
-			dcb_success) {
-			printf("Set persistent failed put_pg()\n");
+		if (set_persistent(device_name, &attr_ptr) != dcb_success) {
+			LLDPAD_DBG("Set persistent failed put_pg()\n");
 			result = dcb_device_not_found;
 			goto Exit;
 		}
 		/* Copy the writable protocol * variables */
 		feature_protocol_attribs *dStore = &(it->second->protocol);
+
 		if (dStore->Enable && !(pg_data->protocol.Enable))
-			log_message(MSG_INFO_PG_DISABLED, "%s", device_name);
+			LLDPAD_INFO("%s PG disabled", device_name);
 		else if (!(dStore->Enable) && pg_data->protocol.Enable)
-			log_message(MSG_INFO_PG_ENABLED, "%s", device_name);
+			LLDPAD_INFO("%s PG enabled", device_name);
+
 		dStore->Advertise_prev  = dStore->Advertise;
 		dStore->Advertise       = pg_data->protocol.Advertise;
 		dStore->Enable          = pg_data->protocol.Enable;
@@ -1694,17 +1623,14 @@ dcb_result put_pg(char *device_name,  pg_attribs *pg_data)
 
 		memcpy(&(it->second->rx), &(pg_data->rx), sizeof(pg_data->rx));
 		memcpy(&(it->second->tx), &(pg_data->tx), sizeof(pg_data->tx));
-		if (it->second->protocol.dcbx_st == dcbx_subtype2) {
+		if (it->second->protocol.dcbx_st == dcbx_subtype2)
 			it->second->num_tcs = pg_data->num_tcs;
-		}
 
 		DCB_SET_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PG);
 
 		/* Run the protocol */
-		if (bChange) {
-			result = run_dcb_protocol(device_name, EventFlag,
-							SUBTYPE_DEFAULT);
-		}
+		result = run_dcb_protocol(device_name, EventFlag,
+					  SUBTYPE_DEFAULT);
 	} else {
 		/* Not in DCB data store, so store in persistent storage */
 		if (get_persistent(device_name, &attribs) == dcb_success) {
@@ -1713,7 +1639,7 @@ dcb_result put_pg(char *device_name,  pg_attribs *pg_data)
 			attr_ptr.pgid = &attribs.descript;
 			if (set_persistent(device_name, &attr_ptr) !=
 					dcb_success) {
-				printf("Set persistent failed in put_pg()\n");
+				LLDPAD_DBG("Set persistent failed in put_pg()\n");
 				result = dcb_device_not_found;
 			}
 		} else {
@@ -1734,20 +1660,17 @@ dcb_result put_peer_pg(char *device_name,  pg_attribs *peer_pg_data)
 		return dcb_bad_params;
 	pg_it peer_it = pg_find(&peer_pg, device_name);
 	if (peer_it == NULL) {
-		printf("could not find peer_pg data for %s\n", device_name);
+		LLDPAD_DBG("could not find peer_pg data for %s\n", device_name);
 		result = dcb_device_not_found;
 		goto Exit;
 	}
 
-	if (peer_pg_data->protocol.dcbx_st == dcbx_subtype2) {
+	if (peer_pg_data->protocol.dcbx_st == dcbx_subtype2)
 		rebalance_uppcts(peer_pg_data);
-	}
 
 	/* detect config change */
-	if (memcmp(peer_it->second, peer_pg_data,
-		sizeof(*peer_pg_data)) == 0) {
+	if (memcmp(peer_it->second, peer_pg_data, sizeof(*peer_pg_data)) == 0)
 		goto Exit;
-	}
 
 	/* Copy the writable protocol variables. */
 	dStore = &(peer_it->second->protocol);
@@ -1766,9 +1689,8 @@ dcb_result put_peer_pg(char *device_name,  pg_attribs *peer_pg_data)
 		sizeof(peer_pg_data->rx));
 	memcpy(&(peer_it->second->tx), &(peer_pg_data->tx),
 		sizeof(peer_pg_data->tx));
-	if (peer_it->second->protocol.dcbx_st == dcbx_subtype2) {
+	if (peer_it->second->protocol.dcbx_st == dcbx_subtype2)
 		peer_it->second->num_tcs = peer_pg_data->num_tcs;
-	}
 Exit:
 	return result;
 }
@@ -1802,11 +1724,11 @@ dcb_result get_oper_pfc(char *device_name, pfc_attribs *pfc_data)
 	if (!pfc_data)
 		return dcb_bad_params;
 	pfc_it it = pfc_find(&oper_pfc, device_name);
-	if (it != NULL) {
+	if (it != NULL)
 		memcpy(pfc_data, it->second, sizeof(*pfc_data));
-	} else {
+	else
 		result = dcb_device_not_found;
-	}
+
 	return result;
 }
 
@@ -1817,11 +1739,11 @@ dcb_result get_peer_pfc(char *device_name, pfc_attribs *pfc_data)
 	if (!pfc_data)
 		return dcb_bad_params;
 	pfc_it it = pfc_find(&peer_pfc, device_name);
-	if (it != NULL) {
+	if (it != NULL)
 		memcpy(pfc_data, it->second, sizeof(*pfc_data));
-	} else {
+	else
 		result = dcb_device_not_found;
-	}
+
 	return result;
 }
 
@@ -1840,22 +1762,25 @@ dcb_result put_pfc(char *device_name, pfc_attribs *pfc_data)
 	pfc_it it = pfc_find(&pfc, device_name);
 	if (it != NULL) {
 		/* detect no config change */
-		if (memcmp(it->second, pfc_data, sizeof(*pfc_data)) == 0) {
+		if (memcmp(it->second, pfc_data, sizeof(*pfc_data)) == 0)
 			goto Exit;
-		}
+
 		bChange = true;
 		memset(&attr_ptr, 0, sizeof(attr_ptr));
 		attr_ptr.pfc = pfc_data;
 		if (set_persistent(device_name, &attr_ptr) != dcb_success) {
-			printf("Set persistent failed in put_pfc()\n");
+			LLDPAD_DBG("Set persistent failed in put_pfc()\n");
 			result = dcb_device_not_found;
 			goto Exit;
 		}
+
 		feature_protocol_attribs *dStore = &(it->second->protocol);
+
 		if (dStore->Enable && !(pfc_data->protocol.Enable))
-			log_message(MSG_INFO_PFC_DISABLED, "%s", device_name);
+			LLDPAD_INFO("%s PFC disabled", device_name);
 		else if (!(dStore->Enable) && pfc_data->protocol.Enable)
-			log_message(MSG_INFO_PFC_ENABLED, "%s", device_name);
+			LLDPAD_INFO("%s PFC enabled", device_name);
+
 		dStore->Advertise_prev  = dStore->Advertise;
 		dStore->Advertise       = pfc_data->protocol.Advertise;
 		dStore->Enable          = pfc_data->protocol.Enable;
@@ -1864,16 +1789,14 @@ dcb_result put_pfc(char *device_name, pfc_attribs *pfc_data)
 
 		memcpy(it->second->admin, pfc_data->admin,
 			sizeof(pfc_data->admin));
-		if (it->second->protocol.dcbx_st == dcbx_subtype2) {
+		if (it->second->protocol.dcbx_st == dcbx_subtype2)
 			it->second->num_tcs = pfc_data->num_tcs;
-		}
 
 		/* Run the protocol */
 		DCB_SET_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PFC);
-		if (bChange) {
+		if (bChange) 
 			result = run_dcb_protocol(device_name, EventFlag,
 							SUBTYPE_DEFAULT);
-		}
 	} else {
 		/* Store in persistent storage - not in DCB data store */
 		if (get_persistent(device_name, &attribs) == dcb_success) {
@@ -1884,8 +1807,7 @@ dcb_result put_pfc(char *device_name, pfc_attribs *pfc_data)
 					dcb_success) {
 				result = dcb_device_not_found;
 			}
-		}
-		else
+		} else
 			result = dcb_device_not_found;
 	}
 Exit:
@@ -1902,16 +1824,14 @@ dcb_result put_peer_pfc(char *device_name, pfc_attribs *peer_pfc_data)
 		return dcb_bad_params;
 	pfc_it peer_it = pfc_find(&peer_pfc, device_name);
 	if (peer_it == NULL){
-		printf("putting peer_pfc data - bad device name\n");
+		LLDPAD_DBG("putting peer_pfc data - bad device name\n");
 		result = dcb_device_not_found;
 		goto Exit;
 	}
 
 	/* detect config change */
-	if (memcmp(peer_it->second, peer_pfc_data,
-		sizeof(*peer_pfc_data)) == 0) {
+	if (memcmp(peer_it->second, peer_pfc_data, sizeof(*peer_pfc_data)) == 0)
 		goto Exit;
-	}
 
 	dStore = &(peer_it->second->protocol);
 	dStore->Advertise_prev  = dStore->Advertise;
@@ -1927,9 +1847,8 @@ dcb_result put_peer_pfc(char *device_name, pfc_attribs *peer_pfc_data)
 
 	memcpy(peer_it->second->admin, &peer_pfc_data->admin,
 		sizeof(peer_pfc_data->admin));
-	if (peer_it->second->protocol.dcbx_st == dcbx_subtype2) {
+	if (peer_it->second->protocol.dcbx_st == dcbx_subtype2)
 		peer_it->second->num_tcs = peer_pfc_data->num_tcs;
-	}
 Exit:
 	return result;
 }
@@ -1950,8 +1869,7 @@ dcb_result get_app(char *device_name, u32 subtype, app_attribs *app_data)
 		if (result == dcb_success) {
 			memcpy(app_data, &attribs.app[subtype],
 			sizeof(*app_data));
-		}
-		else
+		} else
 			result = dcb_device_not_found;
 	}
 	return result;
@@ -1962,11 +1880,11 @@ dcb_result get_oper_app(char *device_name, u32 subtype, app_attribs *app_data)
 	dcb_result result = dcb_success;
 
 	app_it it = apptlv_find(&oper_apptlv, device_name, subtype);
-	if (it != NULL) {
+	if (it != NULL)
 		memcpy(app_data, it->second, sizeof(*app_data));
-	} else {
+	else
 		result = dcb_device_not_found;
-	}
+
 	return result;
 }
 
@@ -1975,11 +1893,11 @@ dcb_result get_peer_app(char *device_name, u32 subtype, app_attribs *app_data)
 	dcb_result result = dcb_success;
 
 	app_it it = apptlv_find(&peer_apptlv, device_name, subtype);
-	if (it != NULL) {
+	if (it != NULL)
 		memcpy(app_data, it->second, sizeof(*app_data));
-	} else {
+	else
 		result = dcb_device_not_found;
-	}
+
 	return result;
 }
 
@@ -1988,8 +1906,8 @@ dcb_result put_app(char *device_name, u32 subtype, app_attribs *app_data)
 	full_dcb_attribs attribs;
 	full_dcb_attrib_ptrs attr_ptr;
 	u32              EventFlag = 0;
-	bool        bChange = false;
 	dcb_result       result = dcb_success;
+	int i;
 
 	if (!app_data)
 		return dcb_bad_params;
@@ -2003,19 +1921,34 @@ dcb_result put_app(char *device_name, u32 subtype, app_attribs *app_data)
 			goto Exit;
 		}
 		/* Store in persistent storage */
-		bChange = true;
 		memset(&attr_ptr, 0, sizeof(attr_ptr));
 		attr_ptr.app = app_data;
 		attr_ptr.app_subtype = (u8)subtype;
 		if (set_persistent(device_name, &attr_ptr) != dcb_success) {
-			printf("Set persistent failed in put_app()\n");
+			LLDPAD_DBG("Set persistent failed in put_app()\n");
 			return dcb_device_not_found;
 		}
+
+		for (i = 0; i < DCB_MAX_APPTLV; i++) {
+			if (i == subtype)
+				continue;
+			app_it ait = apptlv_find(&apptlv, device_name, i);
+			memset(&attr_ptr, 0, sizeof(attr_ptr));
+			attr_ptr.app = ait->second;
+			attr_ptr.app->protocol.Enable = app_data->protocol.Enable;
+			attr_ptr.app->protocol.Willing = app_data->protocol.Willing;
+			attr_ptr.app_subtype = i;
+			if (set_persistent(device_name, &attr_ptr) != dcb_success) {
+				LLDPAD_DBG("Set persistent failed put_app()\n");
+				return dcb_device_not_found;
+			}
+		}
+
 		feature_protocol_attribs *dStore = &(it->second->protocol);
 		if (dStore->Enable && !(app_data->protocol.Enable))
-			log_message(MSG_INFO_APP_DISABLED, "%s", device_name);
+			LLDPAD_INFO("%s APP disabled", device_name);
 		else if (!(dStore->Enable) && app_data->protocol.Enable)
-			log_message(MSG_INFO_APP_ENABLED, "%s", device_name);
+			LLDPAD_INFO("%s APP enabled", device_name);
 		dStore->Advertise_prev  = dStore->Advertise;
 		dStore->Advertise       = app_data->protocol.Advertise;
 		dStore->Enable          = app_data->protocol.Enable;
@@ -2027,13 +1960,9 @@ dcb_result put_app(char *device_name, u32 subtype, app_attribs *app_data)
 			memcpy(&(it->second->AppData), &(app_data->AppData),
 				app_data->Length);
 		}
-		DCB_SET_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV);
 
-		if (bChange) {
-			result = run_dcb_protocol (device_name,
-				EventFlag, subtype);
-		}
-
+		DCB_SET_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV(subtype));
+		result = run_dcb_protocol(device_name, EventFlag, subtype);
 	} else {
 		/* Not in DCB data store, store in persistent storage */
 		if (get_persistent(device_name, &attribs) == dcb_success) {
@@ -2043,7 +1972,7 @@ dcb_result put_app(char *device_name, u32 subtype, app_attribs *app_data)
 			attr_ptr.pgid = &attribs.descript;
 			if (set_persistent(device_name, &attr_ptr) !=
 				dcb_success) {
-				printf("Set persistent failed in put_app()\n");
+				LLDPAD_DBG("Set persistent failed in put_app()\n");
 				result = dcb_device_not_found;
 			}
 		} else {
@@ -2065,14 +1994,13 @@ dcb_result put_peer_app(char *device_name, u32 subtype,
 		return dcb_bad_params;
 	app_it peer_it = apptlv_find(&peer_apptlv, device_name, subtype);
 	if (peer_it == NULL) {
-		printf("putting peer_app data - bad device name\n");
+		LLDPAD_DBG("putting peer_app data - bad device name\n");
 		result = dcb_device_not_found;
 		goto Exit;
 	}
-	if (memcmp(peer_it->second, peer_app_data,
-		sizeof(*peer_app_data)) == 0) {
+
+	if (memcmp(peer_it->second, peer_app_data, sizeof(*peer_app_data)) == 0)
 		goto Exit;
-	}
 
 	dStore = &(peer_it->second->protocol);
 	dStore->Advertise_prev = dStore->Advertise;
@@ -2110,24 +2038,23 @@ dcb_result put_llink(char *device_name, u32 subtype, llink_attribs *llink_data)
 		/* Lock the data first */
 
 		/* detect no config change */
-		if (memcmp(it->second, llink_data,
-			sizeof(*llink_data)) == 0) {
+		if (memcmp(it->second, llink_data, sizeof(*llink_data)) == 0)
 			goto Exit;
-		}
+
 		bChange = true;
 		memset(&attr_ptr, 0, sizeof(attr_ptr));
 		attr_ptr.llink = llink_data;
 		attr_ptr.llink_subtype = LLINK_FCOE_STYPE;
 		if (set_persistent(device_name, &attr_ptr) != dcb_success) {
-			printf("Set persistent failed in put_llink()\n");
+			LLDPAD_DBG("Set persistent failed in put_llink()\n");
 			result = dcb_device_not_found;
 			goto Exit;
 		}
 		feature_protocol_attribs *dStore = &(it->second->protocol);
 		if (dStore->Enable && !(llink_data->protocol.Enable))
-			log_message(MSG_INFO_LLINK_DISABLED, "%s",device_name);
+			LLDPAD_INFO("%s LLINK disabled", device_name);
 		else if (!(dStore->Enable) && llink_data->protocol.Enable)
-			log_message(MSG_INFO_LLINK_ENABLED, "%s", device_name);
+			LLDPAD_INFO("%s LLINK enabled", device_name);
 		dStore->Advertise_prev  = dStore->Advertise;
 		dStore->Advertise       = llink_data->protocol.Advertise;
 		dStore->Enable          = llink_data->protocol.Enable;
@@ -2156,8 +2083,7 @@ dcb_result put_llink(char *device_name, u32 subtype, llink_attribs *llink_data)
 				!= dcb_success) {
 				result = dcb_device_not_found;
 			}
-		}
-		else
+		} else
 			result = dcb_device_not_found;
 	}
 Exit:
@@ -2175,7 +2101,7 @@ dcb_result put_peer_llink(char *device_name, u32 subtype,
 		return dcb_bad_params;
 	llink_it peer_it = llink_find(&peer_llink, device_name, subtype);
 	if (peer_it == NULL){
-		printf("putting peer_llink data - bad device name\n");
+		LLDPAD_DBG("putting peer_llink data - bad device name\n");
 		result = dcb_device_not_found;
 		goto Exit;
 	}
@@ -2235,11 +2161,10 @@ dcb_result get_oper_llink(char *device_name, u32 subtype,
 	if (!llink_data)
 		return dcb_bad_params;
 	llink_it it = llink_find(&oper_llink, device_name, subtype);
-	if (it != NULL) {
+	if (it != NULL)
 		memcpy(llink_data, it->second, sizeof(*llink_data));
-	} else {
+	else
 		result = dcb_device_not_found;
-	}
 
 	return result;
 
@@ -2253,11 +2178,10 @@ dcb_result get_peer_llink(char *device_name, u32 subtype,
 	if (!llink_data)
 		return dcb_bad_params;
 	llink_it it = llink_find(&peer_llink, device_name, subtype);
-	if (it != NULL) {
+	if (it != NULL)
 		memcpy(llink_data, it->second, sizeof(*llink_data));
-	} else {
+	else
 		result = dcb_device_not_found;
-	}
 
 	return result;
 }
@@ -2270,11 +2194,11 @@ dcb_result get_control(char *device_name,
 	if (!control_data)
 		return dcb_bad_params;
 	control_prot_it it = ctrl_prot_find(&dcb_control_prot, device_name);
-	if (it != NULL) {
+
+	if (it != NULL)
 		memcpy( control_data, it->second, sizeof(*control_data));
-	} else {
+	else
 		result = dcb_device_not_found;
-	}
 
 	return result;
 }
@@ -2288,12 +2212,11 @@ dcb_result get_peer_control(char *device_name,
 		return dcb_bad_params;
 	control_prot_it it = ctrl_prot_find(&dcb_peer_control_prot,
 						device_name);
-	if (it != NULL) {
+	if (it != NULL)
 		memcpy(peer_control_data, it->second,
 			sizeof(*peer_control_data));
-	} else {
+	else
 		result = dcb_device_not_found;
-	}
 
 	return result;
 }
@@ -2375,7 +2298,7 @@ dcb_result get_bwg_descrpt(char *device_name, u8 bwgid, char **name)
 	}
 	return result;
 Error:
-	printf("get_bwg_descrpt: Failed memory alloc\n");
+	LLDPAD_DBG("get_bwg_descrpt: Failed memory alloc\n");
 	return dcb_failed;
 }
 
@@ -2404,9 +2327,8 @@ dcb_result put_bwg_descrpt(char *device_name, u8 bwgid, char *name)
 		it->second->pgid_desc[bwgid][size] = '\0';
 		memset(&attr_ptr, 0, sizeof(attr_ptr));
 		attr_ptr.pgid = it->second;
-		if (set_persistent(device_name, &attr_ptr) != dcb_success) {
+		if (set_persistent(device_name, &attr_ptr) != dcb_success)
 			return dcb_device_not_found;
-		}
 	} else {
 		/* Store in persistent storage - though not in
 		 * DCB data store */
@@ -2424,7 +2346,7 @@ dcb_result put_bwg_descrpt(char *device_name, u8 bwgid, char *name)
 			attr_ptr.pgid = &attribs.descript;
 			if (set_persistent(device_name, &attr_ptr)
 				!= dcb_success) {
-				printf("Set persistent failed "
+				LLDPAD_DBG("Set persistent failed "
 					"in put_bwg_descrpt()\n");
 				result = dcb_device_not_found;
 			}
@@ -2458,14 +2380,15 @@ void CopyConfigToOper(char *device_name, u32 SrcFlag, u32 EventFlag,
 	int i = 0;
 
 	/* this function relies on the caller to acquire the DCB lock */
-	printf("  CopyConfigToOper %s\n", device_name);
+	LLDPAD_DBG("  CopyConfigToOper %s\n", device_name);
 	if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PG, DCB_LOCAL_CHANGE_PG)
 		|| DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_PG,
 		DCB_REMOTE_CHANGE_PG)) {
 
 		/* Get the Local or Peer store */
 		pg_it Src;
-		pg_it localSrc;
+		pg_it localSrc = NULL;
+
 		if (SrcFlag == LOCAL_STORE) {
 			Src = pg_find(&pg, device_name);
 			if (Src == NULL)
@@ -2485,9 +2408,9 @@ void CopyConfigToOper(char *device_name, u32 SrcFlag, u32 EventFlag,
 
 		/* Get the Oper store */
 		pg_it Oper = pg_find(&oper_pg, device_name);
-		if (Oper == NULL) {
+		if (Oper == NULL)
 			return;
-		}
+
 		/* Copy Src to Oper. */
 		for (i = 0; i < MAX_USER_PRIORITIES; i++) {
 			Oper->second->tx.up[i].pgid =
@@ -2547,17 +2470,17 @@ void CopyConfigToOper(char *device_name, u32 SrcFlag, u32 EventFlag,
 		}
 		/* Get Oper store */
 		pfc_it Oper = pfc_find(&oper_pfc, device_name);
-		if (Oper == NULL) {
+		if (Oper == NULL)
 			return;
-		}
 
 		/* Copy Src to Oper. */
 		memcpy(&Oper->second->admin, &Src->second->admin,
 			sizeof(Src->second->admin));
-	} else if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV,
-			DCB_LOCAL_CHANGE_APPTLV)||
-			DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_APPTLV,
-			DCB_REMOTE_CHANGE_APPTLV)) {
+	} else if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV(Subtype),
+			DCB_LOCAL_CHANGE_APPTLV(Subtype))||
+			DCB_TEST_FLAGS(EventFlag,
+				       DCB_REMOTE_CHANGE_APPTLV(Subtype),
+				       DCB_REMOTE_CHANGE_APPTLV(Subtype))) {
 		/* Get the Local or Peer store */
 
 		app_it Src;
@@ -2579,7 +2502,7 @@ void CopyConfigToOper(char *device_name, u32 SrcFlag, u32 EventFlag,
 						Subtype);
 		if (Oper != NULL) {
 			/* Copy Src to Oper. */
-			printf("  Changing app data from %02x to %02x\n",
+			LLDPAD_DBG("  Changing app data from %02x to %02x\n",
 				Oper->second->AppData[0],
 				Src->second->AppData[0]);
 			Oper->second->Length = Src->second->Length;
@@ -2683,10 +2606,10 @@ bool LocalPeerCompatible(char *device_name, u32 EventFlag, u32 Subtype)
 			}
 		}
 		if (match) {
-			printf("  COMPAT PG - passed\n");
+			LLDPAD_DBG("  COMPAT PG - passed\n");
 			return true;
 		}
-		printf("  COMPAT PG - failed\n");
+		LLDPAD_DBG("  COMPAT PG - failed\n");
 	} else if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PFC,
 			DCB_LOCAL_CHANGE_PFC)||
 			DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_PFC,
@@ -2704,26 +2627,28 @@ bool LocalPeerCompatible(char *device_name, u32 EventFlag, u32 Subtype)
 		if (!memcmp(&Local->second->admin,
 			&Peer->second->admin,
 			sizeof(Local->second->admin))) {
-			printf("  COMPAT PFC - passed\n");
+			LLDPAD_DBG("  COMPAT PFC - passed\n");
 			return true;
 		}
-		printf("  COMPAT PFC - failed\n");
-	} else if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV,
-			DCB_LOCAL_CHANGE_APPTLV)||
-			DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_APPTLV,
-			DCB_REMOTE_CHANGE_APPTLV)) {
+		LLDPAD_DBG("  COMPAT PFC - failed\n");
+	} else if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV(Subtype),
+			DCB_LOCAL_CHANGE_APPTLV(Subtype))||
+			DCB_TEST_FLAGS(EventFlag,
+				       DCB_REMOTE_CHANGE_APPTLV(Subtype),
+				       DCB_REMOTE_CHANGE_APPTLV(Subtype))) {
 
 		/* Get the Local and Peer APPTLV store */
 
 		app_it Local = apptlv_find(&apptlv, device_name, Subtype);
-		if (Local == NULL) {
+
+		if (Local == NULL)
 			goto Error;
-		}
+
 		app_it Peer = apptlv_find(&peer_apptlv, device_name,
 						Subtype);
-		if (Peer == NULL) {
+		if (Peer == NULL)
 			goto Error;
-		}
+
 		if (Local->second->Length == Peer->second->Length) {
 			if (!memcmp(Local->second->AppData,
 				Peer->second->AppData,
@@ -2731,19 +2656,19 @@ bool LocalPeerCompatible(char *device_name, u32 EventFlag, u32 Subtype)
 				return true;
 			}
 		}
-		printf("  COMPAT APP - failed\n");
+		LLDPAD_DBG("  COMPAT APP - failed\n");
 	} else if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_LLINK,
 			DCB_LOCAL_CHANGE_LLINK)||
 			DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_LLINK,
 			DCB_REMOTE_CHANGE_LLINK)) {
 
-		printf("  COMPAT LLINK - failed\n");
+		LLDPAD_DBG("  COMPAT LLINK - failed\n");
 		return false;
 	}
 
 	return false;
 Error:
-	printf("  LocalPeerCompatible: device not found\n");
+	LLDPAD_DBG("  LocalPeerCompatible: device not found\n");
 	return false;
 }
 
@@ -2762,17 +2687,23 @@ int set_configuration(char *device_name, u32 EventFlag)
 		/* Get Oper store */
 		pg_it Oper = pg_find(&oper_pg, device_name);
 		pg_it Local = pg_find(&pg, device_name);
-		if (Oper == NULL || Local == NULL) {
+
+		if (Oper == NULL || Local == NULL)
 			return dcb_failed;
-		}
+
+		Oper->second->num_tcs = Local->second->num_tcs;
+
 		pgroup_attribs pg_data;
 		if (DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_PG,
 			DCB_REMOTE_CHANGE_PG)) {
+			pfc_it op_pfc = pfc_find(&oper_pfc, device_name);
+
 			memset(&attr_ptr, 0, sizeof(attr_ptr));
 			attr_ptr.pg = (Oper->second);
+			attr_ptr.pfc = (op_pfc->second);
 			if ((sResult = dcb_check_config(&attr_ptr))
 				!= dcb_success) {
-				printf("  PG rule check returned error %d\n",
+				LLDPAD_DBG("  PG rule check returned error %d\n",
 					sResult);  /* Localization OK */
 				return sResult;
 			}
@@ -2789,9 +2720,8 @@ int set_configuration(char *device_name, u32 EventFlag)
 		/* Get Oper store */
 		pfc_it Oper = pfc_find(&oper_pfc, device_name);
 		pfc_it Local = pfc_find(&pfc, device_name);
-		if (Oper == NULL || Local == NULL) {
+		if (Oper == NULL || Local == NULL)
 			return dcb_failed;
-		}
 		return set_hw_pfc(device_name, Oper->second->admin,
 			Local->second->protocol.OperMode);
 	} else if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_LLINK,
@@ -2799,25 +2729,44 @@ int set_configuration(char *device_name, u32 EventFlag)
 		DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_LLINK,
 		DCB_REMOTE_CHANGE_LLINK)) {
 		return dcb_success;
-#ifdef DCB_APP_DRV_IF_SUPPORTED
-	} else if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV,
-		DCB_LOCAL_CHANGE_APPTLV) ||
-		DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_APPTLV,
-		DCB_REMOTE_CHANGE_APPTLV)) {
+	} else if (DCB_TEST_FLAGS(EventFlag,
+				  DCB_LOCAL_CHANGE_APPTLV(APP_FCOE_STYPE),
+				  DCB_LOCAL_CHANGE_APPTLV(APP_FCOE_STYPE)) ||
+		DCB_TEST_FLAGS(EventFlag,
+			       DCB_REMOTE_CHANGE_APPTLV(APP_FCOE_STYPE),
+			       DCB_REMOTE_CHANGE_APPTLV(APP_FCOE_STYPE))) {
+		appgroup_attribs app_data;
 
 		/* Get Oper store */
 		app_it Oper = apptlv_find(&oper_apptlv, device_name,
-						DEFAULT_SUBTYPE);
-		if (Oper == NULL) {
+						APP_FCOE_STYPE);
+		if (Oper == NULL)
 			return dcb_success;
-		}
 
-		appgroup_attribs app_data;
 		app_data.dcb_app_idtype = DCB_APP_IDTYPE_ETHTYPE;
 		app_data.dcb_app_id = APP_FCOE_ETHTYPE;
 		app_data.dcb_app_priority = Oper->second->AppData[0];
 		return set_hw_app(device_name, &app_data);
-#endif /* DCB_APP_DRV_IF_SUPPORTED */
+	} else if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV(APP_ISCSI_STYPE),
+		DCB_LOCAL_CHANGE_APPTLV(APP_ISCSI_STYPE)) ||
+		DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_APPTLV(APP_ISCSI_STYPE),
+		DCB_REMOTE_CHANGE_APPTLV(APP_ISCSI_STYPE))) {
+		appgroup_attribs app_data;
+
+		/* Get Oper store */
+		app_it Oper = apptlv_find(&oper_apptlv, device_name,
+						APP_ISCSI_STYPE);
+		app_it Local = apptlv_find(&apptlv, device_name,
+						APP_ISCSI_STYPE);
+		if (Oper == NULL || Local == NULL) {
+			return dcb_failed;
+		}
+
+		app_data.dcb_app_idtype = DCB_APP_IDTYPE_PORTNUM;
+		app_data.dcb_app_id = APP_ISCSI_PORT;
+		app_data.dcb_app_priority = Oper->second->AppData[0];
+
+		return set_hw_app(device_name, &app_data);
 	}
 	return dcb_success;
 }
@@ -2902,6 +2851,10 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 	llink_attribs old_llink_opcfg;
 	int old_llink_opmode = 0;
 	u32 llink_events = 0;
+	int i, mask;
+
+	if (!dcbx_check_active(device_name))
+		return dcb_success;
 
 	memset(&old_pg_opcfg, 0, sizeof(pg_attribs));
 	memset(&old_pfc_opcfg, 0, sizeof(pfc_attribs));
@@ -2931,7 +2884,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 		}
 		if ((peer_feat_prot->Error_Flag & DUP_DCBX_TLV_CTRL) ||
 			(peer_feat_prot->Error_Flag & DUP_DCBX_TLV_PG)) {
-			printf("** FLAG: MISSING PG TLV \n");
+			LLDPAD_DBG("** FLAG: MISSING PG TLV \n");
 			feat_prot->Error_Flag |= FEAT_ERR_MULTI_TLV;
 		} else {
 			feat_prot->Error_Flag &= ~FEAT_ERR_MULTI_TLV;
@@ -2970,7 +2923,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 		}
 		if ((peer_feat_prot->Error_Flag & DUP_DCBX_TLV_CTRL) ||
 			(peer_feat_prot->Error_Flag & DUP_DCBX_TLV_PFC)) {
-			printf("** FLAG: MISSING PFC TLV \n");
+			LLDPAD_DBG("** FLAG: MISSING PFC TLV \n");
 			feat_prot->Error_Flag |= FEAT_ERR_MULTI_TLV;
 		} else {
 			feat_prot->Error_Flag &= ~FEAT_ERR_MULTI_TLV;
@@ -2985,10 +2938,12 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 		}
 	}
 
-	if (DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS, DCB_LOCAL_CHANGE_APPTLV)
-		|| DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-					DCB_REMOTE_CHANGE_APPTLV)) {
-
+	if (DCB_TEST_FLAGS(EventFlag,
+			   DCB_EVENT_FLAGS,
+			   DCB_LOCAL_CHANGE_APPTLV(Subtype)) ||
+	    DCB_TEST_FLAGS(EventFlag,
+			   DCB_EVENT_FLAGS,
+			   DCB_REMOTE_CHANGE_APPTLV(Subtype))) {
 		/* Get the local feature protocol */
 		app_it it = apptlv_find(&apptlv, device_name, Subtype);
 		if (it != NULL) {
@@ -3007,7 +2962,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 		}
 		if ((peer_feat_prot->Error_Flag & DUP_DCBX_TLV_CTRL) ||
 			(peer_feat_prot->Error_Flag & DUP_DCBX_TLV_APP)) {
-			printf("** FLAG: MISSING APP TLV \n");
+			LLDPAD_DBG("** FLAG: MISSING APP TLV \n");
 			feat_prot->Error_Flag |= FEAT_ERR_MULTI_TLV;
 		} else {
 			feat_prot->Error_Flag &= ~FEAT_ERR_MULTI_TLV;
@@ -3045,7 +3000,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 		}
 		if ((peer_feat_prot->Error_Flag & DUP_DCBX_TLV_CTRL) ||
 			(peer_feat_prot->Error_Flag & DUP_DCBX_TLV_LLINK)) {
-			printf("** FLAG: MISSING LLINK TLV \n");
+			LLDPAD_DBG("** FLAG: MISSING LLINK TLV \n");
 			feat_prot->Error_Flag |= FEAT_ERR_MULTI_TLV;
 		} else {
 			feat_prot->Error_Flag &= ~FEAT_ERR_MULTI_TLV;
@@ -3062,20 +3017,17 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 
 	/* Get the local control protocol variables. */
 	ctrl_prot = ctrl_prot_find(&dcb_control_prot, device_name);
-	if (ctrl_prot == NULL) {
+	if (ctrl_prot == NULL)
 		goto ErrNoDevice;
-	}
 	/* Get the remote control protocol variables. */
 	peer_ctrl_prot = ctrl_prot_find(&dcb_peer_control_prot, device_name);
-	if (peer_ctrl_prot == NULL) {
+	if (peer_ctrl_prot == NULL)
 		goto ErrNoDevice;
-	}
-	if ((feat_prot == NULL) || (peer_feat_prot == NULL)) {
+	if ((feat_prot == NULL) || (peer_feat_prot == NULL))
 		goto ErrNoDevice;
-	}
 	if (peer_ctrl_prot->second->Error_Flag & TOO_MANY_NGHBRS) {
 		peer_feat_prot->TLVPresent = false;
-		printf("** Set Flag: TOO MANY NEIGHBORS \n");
+		LLDPAD_DBG("** Set Flag: TOO MANY NEIGHBORS \n");
 		feat_prot->Error_Flag |= FEAT_ERR_MULTI_PEER;
 	} else {
 		feat_prot->Error_Flag &= ~FEAT_ERR_MULTI_PEER;
@@ -3092,7 +3044,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 		/* If Syncd false, then control state machine will
 		 * TX LLDP message with local config. */
 		feat_prot->Syncd = !(feat_prot->Advertise);
-		printf("Set Syncd to %u [%u]\n", feat_prot->Syncd, __LINE__);
+		LLDPAD_DBG("Set Syncd to %u [%u]\n", feat_prot->Syncd, __LINE__);
 		feat_prot->State = DCB_LISTEN;
 
 		/* Ensure PFC settings are synced up on initialization */
@@ -3101,34 +3053,27 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 			just_added = true;
 	}
 	if (feat_prot->State == DCB_LISTEN) {
-		printf("Feature state machine (flags %x)\n", EventFlag);
+		LLDPAD_DBG("Feature state machine (flags %x)\n", EventFlag);
 		local_change = false;
-		if (DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_LOCAL_CHANGE_PG)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_LOCAL_CHANGE_PFC)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_LOCAL_CHANGE_APPTLV)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_LOCAL_CHANGE_LLINK)
-			) {
-
+		mask = DCB_SET_ALL_FLAGS(LOCAL);
+		if (EventFlag & mask) {
 			local_change = true;
-			printf("  Local change:");
-			printf(" %s", (EventFlag & DCB_LOCAL_CHANGE_PG) ?
+			LLDPAD_DBG("  Local change*0x%x:", EventFlag);
+			LLDPAD_DBG(" %s", (EventFlag & DCB_LOCAL_CHANGE_PG) ?
 				"PG" : "");
-			printf(" %s", (EventFlag & DCB_LOCAL_CHANGE_PFC) ?
+			LLDPAD_DBG(" %s", (EventFlag & DCB_LOCAL_CHANGE_PFC) ?
 				"PFC" : "");
-			printf(" %s", (EventFlag & DCB_LOCAL_CHANGE_APPTLV) ?
-				"APP" : "");
-			printf(" %s", (EventFlag & DCB_LOCAL_CHANGE_LLINK) ?
+			for (i = 0; i < DCB_MAX_APPTLV; i++)
+				if (EventFlag & DCB_LOCAL_CHANGE_APPTLV(i))
+					LLDPAD_DBG(" APP%d", i);
+			LLDPAD_DBG(" %s", (EventFlag & DCB_LOCAL_CHANGE_LLINK) ?
 				"LLINK" : "");
-			printf("\n");
+			LLDPAD_DBG("\n");
 		}
 
 		/* If local changed and we are already synched... */
 		if (local_change && feat_prot->Syncd) {
-			printf("  Local feature already synced\n");
+			LLDPAD_DBG("  Local feature already synced\n");
 			/* If we are not synched, we won't be able
 			 * to accept new local changes until we get
 			 * back remote changes for previous local
@@ -3142,11 +3087,11 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 			if ((feat_prot->Advertise == true) ||
 				(feat_prot->Advertise_prev == true)) {
 				feat_prot->Syncd = false;
-				printf("  Set Syncd to %u [%u]\n",
+				LLDPAD_DBG("  Set Syncd to %u [%u]\n",
 					feat_prot->Syncd, __LINE__);
 			} else {
 				feat_prot->Syncd = true;
-				printf("  Set Syncd to %u [%u]\n",
+				LLDPAD_DBG("  Set Syncd to %u [%u]\n",
 					feat_prot->Syncd, __LINE__);
 				feat_prot->tlv_sent = true;
 			}
@@ -3154,16 +3099,16 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 		/* F4 If don't advertise, then copy the local config to
 		 * Oper config. */
 		if (!feat_prot->Advertise) {
-			printf("  F5 - Advertise mode OFF:");
-			printf(" %s", (EventFlag&(DCB_LOCAL_CHANGE_PG |
+			LLDPAD_DBG("  F5 - Advertise mode OFF:");
+			LLDPAD_DBG(" %s", (EventFlag&(DCB_LOCAL_CHANGE_PG |
 				DCB_REMOTE_CHANGE_PG)) ? "PG" : "");
-			printf(" %s", (EventFlag&(DCB_LOCAL_CHANGE_PFC |
+			LLDPAD_DBG(" %s", (EventFlag&(DCB_LOCAL_CHANGE_PFC |
 				DCB_REMOTE_CHANGE_PFC)) ? "PFC" : "");
-			printf(" %s", (EventFlag&(DCB_LOCAL_CHANGE_APPTLV |
-				DCB_REMOTE_CHANGE_APPTLV)) ? "APP" :"");
-			printf(" %s", (EventFlag&(DCB_LOCAL_CHANGE_LLINK |
+			if (EventFlag & DCB_LOCAL_CHANGE_APPTLV(Subtype))
+				LLDPAD_DBG(" APP%d", Subtype);
+			LLDPAD_DBG(" %s", (EventFlag&(DCB_LOCAL_CHANGE_LLINK |
 				DCB_REMOTE_CHANGE_LLINK)) ? "LLINK" : "");
-			printf("\n");
+			LLDPAD_DBG("\n");
 
 			/* copy the local config to Oper config. */
 			CopyConfigToOper(device_name, LOCAL_STORE,
@@ -3187,7 +3132,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 			goto OperChange;
 		}
 
-		/* On first call from add_adapter() ensure that the HW
+		/* On first call from add_port() ensure that the HW
 		 * configuration is synced with the DCBX operational state.
 		*/
 		if (just_added) {
@@ -3197,26 +3142,18 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 		}
 
 		/* Process remote change. */
-		if (DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_REMOTE_CHANGE_PG)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_REMOTE_CHANGE_PFC)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_REMOTE_CHANGE_APPTLV)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_REMOTE_CHANGE_LLINK)
-		) {
-
-			printf("  Remote change: ");
-			printf(" %s", (EventFlag & DCB_REMOTE_CHANGE_PG) ?
+		mask = DCB_SET_ALL_FLAGS(REMOTE);
+		if (EventFlag & mask) {
+			LLDPAD_DBG("  Remote change: ");
+			LLDPAD_DBG(" %s", (EventFlag & DCB_REMOTE_CHANGE_PG) ?
 				"PG" : "");
-			printf(" %s", (EventFlag & DCB_REMOTE_CHANGE_PFC) ?
+			LLDPAD_DBG(" %s", (EventFlag & DCB_REMOTE_CHANGE_PFC) ?
 				"PFC" : "");
-			printf(" %s", (EventFlag & DCB_REMOTE_CHANGE_APPTLV) ?
-				"APP" : "");
-			printf(" %s", (EventFlag & DCB_REMOTE_CHANGE_LLINK) ?
+			if (EventFlag & DCB_REMOTE_CHANGE_APPTLV(Subtype))
+				LLDPAD_DBG(" App%d", Subtype);
+			LLDPAD_DBG(" %s", (EventFlag & DCB_REMOTE_CHANGE_LLINK) ?
 				"LLINK" : "");
-			printf("\n");
+			LLDPAD_DBG("\n");
 
 			/* This version check is part of the Control
 			 * protocol state machine that must be
@@ -3235,7 +3172,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 				/* Handle Peer expiration */
 				if (peer_ctrl_prot->second->RxDCBTLVState ==
 						DCB_PEER_EXPIRED) {
-					printf("  F6.2 - Peer DCBX TLV Expired\n");
+					LLDPAD_DBG("  F6.2 - Peer DCBX TLV Expired\n");
 					CopyConfigToOper(device_name,
 						LOCAL_STORE,EventFlag,Subtype);
 					feat_prot->OperMode = false;
@@ -3251,13 +3188,13 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 
 			/* Handle feature TLV not present */
 			if (!peer_feat_prot->TLVPresent) {
-				printf("  F8 - Feature not present\n");
+				LLDPAD_DBG("  F8 - Feature not present\n");
 				/* copy the local config to Oper config. */
 				CopyConfigToOper(device_name, LOCAL_STORE,
 					EventFlag, Subtype);
 				feat_prot->OperMode = false;
 				feat_prot->Syncd = true;
-				printf("  Set Syncd to %u [%u]\n",
+				LLDPAD_DBG("  Set Syncd to %u [%u]\n",
 					feat_prot->Syncd, __LINE__);
 				feat_prot->Oper_version =
 					feat_prot->Max_version;
@@ -3277,7 +3214,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 				!= feat_prot->FeatureSeqNo)) {
 
 				/* Wait for the Peer to synch up. */
-				printf("  Wait for Peer to synch: "
+				LLDPAD_DBG("  Wait for Peer to synch: "
 					"Peer AckNo %d, FeatureSeqNo %d \n",
 					peer_ctrl_prot->second->AckNo,
 					feat_prot->FeatureSeqNo);
@@ -3285,7 +3222,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 			}
 
 			if (feat_prot->Error_Flag & FEAT_ERR_MULTI_TLV) {
-				printf("  F9.1 - Rcvd Multiple DCBX TLVs\n");
+				LLDPAD_DBG("  F9.1 - Rcvd Multiple DCBX TLVs\n");
 				/* Copy Local config to Oper config. */
 				CopyConfigToOper(device_name, LOCAL_STORE,
 					EventFlag, Subtype);
@@ -3311,26 +3248,26 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 				feat_prot->Oper_version =
 					MIN(peer_feat_prot->Max_version,
 					feat_prot->Max_version);
-				printf("  Update feature oper version to %d "
+				LLDPAD_DBG("  Update feature oper version to %d "
 					"and signal send\n",
 					feat_prot->Oper_version);
 				feat_prot->Syncd = false;
-				printf("  Set Syncd to %u [%u]\n",
+				LLDPAD_DBG("  Set Syncd to %u [%u]\n",
 					feat_prot->Syncd, __LINE__);
 				feat_prot->FeatureSeqNo =
 					ctrl_prot->second->SeqNo + 1;
 				goto OperChange;
 			}
 			feat_prot->Syncd =  true;
-			printf("  Set Syncd to %u [%u]\n",
+			LLDPAD_DBG("  Set Syncd to %u [%u]\n",
 				feat_prot->Syncd, __LINE__);
 				/* F13/F14 */
 
 			if (feat_prot->Oper_version !=
 				peer_feat_prot->Oper_version ) {
 				/* Wait for Peer to synch up with * version */
-				printf("  Wait for the Peer to synch up ");
-				printf("with feature version.\n");
+				LLDPAD_DBG("  Wait for the Peer to synch up ");
+				LLDPAD_DBG("with feature version.\n");
 				goto OperChange;
 			}
 
@@ -3338,7 +3275,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 			/* F15 If feature is disabled on any side,
 			 * then make Opermode false. */
 			if (!feat_prot->Enable || !peer_feat_prot->Enable) {
-				printf("  F16 - Feature is disabled\n");
+				LLDPAD_DBG("  F16 - Feature is disabled\n");
 				/* Copy Local config to Oper config. */
 				CopyConfigToOper(device_name, LOCAL_STORE,
 					EventFlag, Subtype);
@@ -3368,7 +3305,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 			}
 			/* F17 */
 			if (feat_prot->Willing && !feat_prot->PeerWilling) {
-				printf("  F18 - local willing,  "
+				LLDPAD_DBG("  F18 - local willing,  "
 					"peer NOT willing\n");
 
 				feat_prot->Error_Flag = FEAT_ERR_NONE;
@@ -3415,7 +3352,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 			}
 			/* F19 */
 			if (!feat_prot->Willing && feat_prot->PeerWilling) {
-				printf("  F20 - local NOT willing,  "
+				LLDPAD_DBG("  F20 - local NOT willing,  "
 					"peer willing\n");
 
 				/* Copy Local config to Oper config. */
@@ -3453,7 +3390,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 			if ((feat_prot->Willing == feat_prot->PeerWilling) &&
 				(LocalPeerCompatible(device_name,
 				EventFlag, Subtype))) {
-				printf("  F22 - local willing == peer willing\n");
+				LLDPAD_DBG("  F22 - local willing == peer willing\n");
 
 				/* Copy Local config to Oper config. */
 				CopyConfigToOper(device_name,
@@ -3484,7 +3421,7 @@ dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 				if (Err != feat_prot->Error)
 					ErrorChanged = true;
 			} else {
-				printf("  F23 - Local & Peer config not"
+				LLDPAD_DBG("  F23 - Local & Peer config not"
 					" compatible\n");
 				/* Copy Local config to Oper config. */
 				CopyConfigToOper(device_name,
@@ -3517,7 +3454,7 @@ ErrProt:
 
 			if (feat_prot->dcbx_st == dcbx_subtype1) {
 				if (feat_prot->Error || peer_feat_prot->Error){
-					printf("  ## FEATURE ERROR: "
+					LLDPAD_DBG("  ## FEATURE ERROR: "
 						"%d, %d (Error_Flag 0x%x"
 						" EventFlag 0x%x)\n",
 						feat_prot->Error,
@@ -3533,10 +3470,10 @@ ErrProt:
 				}
 			}
 			if (ErrorChanged) {
-				printf("  ErrorChanged \n");
+				LLDPAD_DBG("  ErrorChanged \n");
 				if (feat_prot->dcbx_st == dcbx_subtype1) {
 					feat_prot->Syncd = false;
-					printf("  Set Syncd to %u [%u]\n",
+					LLDPAD_DBG("  Set Syncd to %u [%u]\n",
 						feat_prot->Syncd, __LINE__);
 				}
 				feat_prot->FeatureSeqNo =
@@ -3550,19 +3487,20 @@ OperChange:
 			DCB_REMOTE_CHANGE_PG)) {
 
 			pg_it Oper = pg_find(&oper_pg, device_name);
-			if (Oper == NULL) {
+
+			if (Oper == NULL)
 				goto ErrNoDevice;
-			}
+
 			if (memcmp(&(old_pg_opcfg.tx), &(Oper->second->tx),
 				sizeof(old_pg_opcfg.tx)) != 0)
 				pg_events = pg_events | EVENT_OPERATTR;
 			if (feat_prot->OperMode != old_pg_opmode) {
 				pg_events = pg_events | EVENT_OPERMODE;
 				if (feat_prot->OperMode) {
-					log_message(MSG_INFO_PG_OPER, "%s",
+					LLDPAD_INFO("%s PG oper mode true",
 						device_name);
 				} else {
-					log_message(MSG_ERR_PG_NONOPER, "%s",
+					LLDPAD_INFO("%s PG oper mode false",
 						device_name);
 				}
 			}
@@ -3573,9 +3511,9 @@ OperChange:
 			DCB_REMOTE_CHANGE_PFC)) {
 
 			pfc_it Oper = pfc_find(&oper_pfc, device_name);
-			if (Oper == NULL) {
+			if (Oper == NULL)
 				goto ErrNoDevice;
-			}
+
 			if (memcmp(&(old_pfc_opcfg.admin),
 				&(Oper->second->admin),
 				sizeof(old_pfc_opcfg.admin)) != 0)
@@ -3584,24 +3522,24 @@ OperChange:
 			if (feat_prot->OperMode != old_pfc_opmode) {
 				pfc_events = pfc_events | EVENT_OPERMODE;
 				if (feat_prot->OperMode) {
-					log_message(MSG_INFO_PFC_OPER, "%s",
+					LLDPAD_INFO("%s PFC oper mode true",
 						device_name);
 				} else {
-					log_message(MSG_ERR_PFC_NONOPER, "%s",
+					LLDPAD_INFO("%s PFC oper mode false",
 						device_name);
 				}
 			}
 		}
 		if (DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_LOCAL_CHANGE_APPTLV) ||
+			DCB_LOCAL_CHANGE_APPTLV(Subtype)) ||
 			DCB_TEST_FLAGS(EventFlag, DCB_EVENT_FLAGS,
-			DCB_REMOTE_CHANGE_APPTLV)) {
+			DCB_REMOTE_CHANGE_APPTLV(Subtype))) {
 
 			app_it Oper = apptlv_find(&oper_apptlv, device_name,
 							Subtype);
-			if (Oper == NULL) {
+			if (Oper == NULL)
 				goto ErrNoDevice;
-			}
+
 			if ((old_app_opcfg.Length != Oper->second->Length)
 				|| (old_app_opcfg.Length &&
 				(memcmp(old_app_opcfg.AppData,
@@ -3613,10 +3551,10 @@ OperChange:
 			if (feat_prot->OperMode != old_app_opmode) {
 				app_events = app_events | EVENT_OPERMODE;
 				if (feat_prot->OperMode) {
-					log_message(MSG_INFO_APP_OPER, "%s",
+					LLDPAD_INFO("%s APP oper mode true",
 						device_name);
 				} else {
-					log_message(MSG_ERR_APP_NONOPER, "%s",
+					LLDPAD_INFO("%s APP oper mode false",
 						device_name);
 				}
 			}
@@ -3628,50 +3566,42 @@ OperChange:
 
 			llink_it Oper = llink_find(&oper_llink, device_name,
 							Subtype);
-			if (Oper == NULL) {
+			if (Oper == NULL)
 				goto ErrNoDevice;
-			}
+
 			if (memcmp(&(old_llink_opcfg.llink),
 				&(Oper->second->llink),
 				sizeof(old_llink_opcfg.llink)) != 0) {
 				llink_events = llink_events | EVENT_OPERATTR;
-				printf("llink opcfg changed \n");
+				LLDPAD_DBG("llink opcfg changed \n");
 			}
 
 			if (feat_prot->OperMode != old_llink_opmode) {
 				llink_events = llink_events | EVENT_OPERMODE;
 				if (feat_prot->OperMode) {
-					printf("llink opmode = true\n");
-					log_message(MSG_INFO_LLINK_OPER, "%s",
-						device_name);
+					LLDPAD_DBG("llink opmode = true\n");
 				} else {
-					printf("llink opmode = false\n");
-					log_message(MSG_ERR_LLINK_NONOPER,"%s",
-						device_name);
+					LLDPAD_DBG("llink opmode = false\n");
 				}
 			}
 		}
 	}
 
-	if (pg_events) {
+	if (pg_events)
 		pg_event(device_name, pg_events);
-	}
-	if (pfc_events) {
+	if (pfc_events)
 		pfc_event(device_name, pfc_events);
-	}
-	if (app_events) {
+	if (app_events)
 		app_event(device_name, Subtype, app_events);
-	}
-	if (llink_events) {
+	if (llink_events)
 		llink_event(device_name, Subtype, llink_events);
-	}
 	return dcb_success;
 
 ErrNoDevice:
 	return dcb_device_not_found;
 
 ErrBadVersion:
-	printf("  Versions not compatible\n");
+	LLDPAD_DBG("  Versions not compatible\n");
 	return dcb_ctrl_vers_not_compatible;
 }
 
@@ -3680,9 +3610,8 @@ dcb_result GetDCBTLVState(char *device_name, u8 *State)
 	/* Get the remote control protocol variables. */
 	control_prot_it peer_ctrl_prot = ctrl_prot_find(&dcb_peer_control_prot,
 							device_name);
-	if (peer_ctrl_prot == NULL) {
+	if (peer_ctrl_prot == NULL)
 		return dcb_device_not_found;
-	}
 
 	*State = (u8)peer_ctrl_prot->second->RxDCBTLVState;
 
@@ -3693,9 +3622,8 @@ bool FeaturesSynched(char *device_name)
 {
 	int i = 0;
 	pg_it it = pg_find(&pg, device_name);
-	if (it == NULL) {
+	if (it == NULL)
 		return false;
-	}
 	if (it->second->protocol.State == DCB_LISTEN) {
 		if ((it->second->protocol.Syncd == false) ||
 			(it->second->protocol.tlv_sent == false))
@@ -3704,21 +3632,19 @@ bool FeaturesSynched(char *device_name)
 
 	/* Get the local PFC feature protocol */
 	pfc_it it1 = pfc_find(&pfc, device_name);
-	if (it1 == NULL) {
+	if (it1 == NULL)
 		return false;
-	}
 	if (it1->second->protocol.State == DCB_LISTEN) {
 		if (it1->second->protocol.Syncd == false ||
-			it1->second->protocol.tlv_sent == false)
+		    it1->second->protocol.tlv_sent == false)
 			return false;
 	}
 
 	/* Get the APP TLV feature protocol. */
 	for (i = 0; i < DCB_MAX_APPTLV ; i++) {
 		app_it it2 = apptlv_find(&apptlv, device_name, i);
-		if (it2 == NULL) {
+		if (it2 == NULL)
 			return false;
-		}
 		if (it2->second->protocol.State == DCB_LISTEN) {
 			if (it2->second->protocol.Syncd == false ||
 				it2->second->protocol.tlv_sent ==false)
@@ -3729,9 +3655,8 @@ bool FeaturesSynched(char *device_name)
 	for (i = 0; i < DCB_MAX_LLKTLV ; i++) {
 		/* Get the local LLINK feature protocol */
 		llink_it it4 = llink_find(&llink, device_name, i);
-		if (it4 == NULL) {
+		if (it4 == NULL)
 			return false;
-		}
 		if (it4->second->protocol.State == DCB_LISTEN) {
 			if (it4->second->protocol.Syncd == false ||
 				it4->second->protocol.tlv_sent == false)
@@ -3747,6 +3672,7 @@ bool FeaturesSynched(char *device_name)
 void update_feature_syncd(char *device_name)
 {
 	int i = 0;
+
 	/* Get the local PG feature protocol */
 	pg_it it = pg_find(&pg, device_name);
 	if (it != NULL) {
@@ -3804,6 +3730,10 @@ void update_feature_syncd(char *device_name)
 dcb_result run_control_protocol(char *device_name, u32 EventFlag)
 {
 	pg_attribs pg_dstore;
+	int i, mask;
+
+	if (!dcbx_check_active(device_name))
+		return dcb_success;
 
 	/* Get the local control protocol variables. */
 	control_prot_it ctrl_prot = ctrl_prot_find(&dcb_control_prot,
@@ -3824,69 +3754,55 @@ dcb_result run_control_protocol(char *device_name, u32 EventFlag)
 		ctrl_prot->second->State = DCB_LISTEN;
 	}
 	if (ctrl_prot->second->State == DCB_LISTEN) {
-		printf("DCB Ctrl in LISTEN \n");
+		LLDPAD_DBG("DCB Ctrl in LISTEN \n");
 		/* Process local change if any. */
-		if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PG,
-			DCB_LOCAL_CHANGE_PG)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PFC,
-			DCB_LOCAL_CHANGE_PFC)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV,
-			DCB_LOCAL_CHANGE_APPTLV)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_LLINK,
-			DCB_LOCAL_CHANGE_LLINK)
-			) {
-
-			printf("  Local change detected: ");
-			printf(" %s", (EventFlag & DCB_LOCAL_CHANGE_PG) ?
+		mask = DCB_SET_ALL_FLAGS(LOCAL);
+		if (EventFlag & mask) {
+			LLDPAD_DBG("  Local change detected: ");
+			LLDPAD_DBG(" %s", (EventFlag & DCB_LOCAL_CHANGE_PG) ?
 				"PG" : "");
-			printf(" %s", (EventFlag & DCB_LOCAL_CHANGE_PFC) ?
+			LLDPAD_DBG(" %s", (EventFlag & DCB_LOCAL_CHANGE_PFC) ?
 				"PFC" : "");
-			printf(" %s", (EventFlag & DCB_LOCAL_CHANGE_APPTLV) ?
-				"APP" : "");
-			printf(" %s", (EventFlag & DCB_LOCAL_CHANGE_LLINK) ?
+			for (i = 0; i < DCB_MAX_APPTLV; i++)
+				if (EventFlag & DCB_LOCAL_CHANGE_APPTLV(i))
+					LLDPAD_DBG(" APP%d", i);
+			LLDPAD_DBG(" %s", (EventFlag & DCB_LOCAL_CHANGE_LLINK) ?
 				"LLINK" : "");
-			printf("\n");
+			LLDPAD_DBG("\n");
 
 			if (ctrl_prot->second->SeqNo ==
 				ctrl_prot->second->MyAckNo) {
-				printf("  Local SeqNo == Local AckNo\n");
+				LLDPAD_DBG("  Local SeqNo == Local AckNo\n");
 				if (!FeaturesSynched(device_name)) {
 					update_feature_syncd(device_name);
 					ctrl_prot->second->SeqNo++;
 
-					printf("  *** Sending packet -- ");
-					printf("SeqNo = %d \t AckNo =  %d \n",
+					LLDPAD_DBG("  *** Sending packet -- ");
+					LLDPAD_DBG("SeqNo = %d \t AckNo =  %d \n",
 						ctrl_prot->second->SeqNo,
 						ctrl_prot->second->AckNo);
 
 					/* Send new DCB ctrl & feature TLVs */
-					somethingChangedLocal(device_name);
+					somethingChangedLocal(device_name, NEAREST_BRIDGE);
 				}
 			}
 			return dcb_success;
 		}
 		/* Process remote change if any. */
-		if (DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_PG,
-			DCB_REMOTE_CHANGE_PG)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_PFC,
-			DCB_REMOTE_CHANGE_PFC)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_APPTLV,
-			DCB_REMOTE_CHANGE_APPTLV)
-			|| DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_LLINK,
-			DCB_REMOTE_CHANGE_LLINK)
-			) {
-
+		mask = DCB_SET_ALL_FLAGS(REMOTE);
+		if (EventFlag & mask) {
 			bool SendDCBTLV = false;
-			printf("  Remote change detected: ");
-			printf(" %s", (EventFlag & DCB_REMOTE_CHANGE_PG) ?
+			LLDPAD_DBG("  Remote change detected(0x%x): ", EventFlag);
+			LLDPAD_DBG(" %s", (EventFlag & DCB_REMOTE_CHANGE_PG) ?
 				"PG" : "");
-			printf(" %s", (EventFlag & DCB_REMOTE_CHANGE_PFC) ?
+			LLDPAD_DBG(" %s", (EventFlag & DCB_REMOTE_CHANGE_PFC) ?
 				"PFC" : "");
-			printf(" %s", (EventFlag & DCB_REMOTE_CHANGE_APPTLV) ?
-				"APP" : "");
-			printf(" %s", (EventFlag & DCB_REMOTE_CHANGE_LLINK) ?
+			for (i = 0; i < DCB_MAX_APPTLV; i++)
+				if (EventFlag & DCB_REMOTE_CHANGE_APPTLV(i))
+					LLDPAD_DBG(" APP%d", i);
+			LLDPAD_DBG(" %s", (EventFlag & DCB_REMOTE_CHANGE_LLINK) ?
 				"LLINK" : "");
-			printf("\n");
+			LLDPAD_DBG("\n");
 
 			u8 State;
 			if (GetDCBTLVState(device_name, &State) ==
@@ -3900,10 +3816,10 @@ dcb_result run_control_protocol(char *device_name, u32 EventFlag)
 					peer_ctrl_prot->second->RxDCBTLVState =
 						DCB_PEER_RESET;
 
-					printf(" Ctrl_prot Peer expired\n");
+					LLDPAD_DBG(" Ctrl_prot Peer expired\n");
 					if (get_pg(device_name, &pg_dstore) !=
 						dcb_success) {
-						printf("unable to get local pg"
+						LLDPAD_DBG("unable to get local pg"
 						" cfg from data store\n");
 						return dcb_device_not_found;
 					}
@@ -3920,7 +3836,7 @@ dcb_result run_control_protocol(char *device_name, u32 EventFlag)
 
 			if (peer_ctrl_prot->second->Error_Flag &
 					DUP_DCBX_TLV_CTRL) {
-				printf("** HANDLE: DUP CTRL TLVs \n");
+				LLDPAD_DBG("** HANDLE: DUP CTRL TLVs \n");
 				goto send;
 			}
 
@@ -3934,14 +3850,14 @@ dcb_result run_control_protocol(char *device_name, u32 EventFlag)
 
 				/* Send the updated DCB TLV */
 				SendDCBTLV = true;
-				printf("  Change Oper Version \n");
+				LLDPAD_DBG("  Change Oper Version \n");
 				goto send;
 			}
 
 			if (ctrl_prot->second->Oper_version !=
 				peer_ctrl_prot->second->Oper_version) {
 				/* Wait for peer to synch up. */
-				printf("  Wait for Peer to synch \n");
+				LLDPAD_DBG("  Wait for Peer to synch \n");
 				goto send;
 			}
 			/* Update MyAck */
@@ -3967,35 +3883,35 @@ dcb_result run_control_protocol(char *device_name, u32 EventFlag)
 			/* If changes in feature then send message with latest
 			 * DCB and FeatureTLV */
 send:
-			printf("  Current -- SeqNo = %d \t MyAckNo =  %d \n",
+			LLDPAD_DBG("  Current -- SeqNo = %d \t MyAckNo =  %d \n",
 				ctrl_prot->second->SeqNo,
 				ctrl_prot->second->MyAckNo);
 			if ((ctrl_prot->second->SeqNo ==
 				ctrl_prot->second->MyAckNo)  &&
 				(!FeaturesSynched(device_name))) {
-				printf("  Features not synced \n");
+				LLDPAD_DBG("  Features not synced \n");
 				update_feature_syncd(device_name);
 				/* Send LLDP message. */
 				ctrl_prot->second->SeqNo++;
-				printf("  *** Sending Packet -- ");
-				printf("SeqNo = %d \t AckNo =  %d \n",
+				LLDPAD_DBG("  *** Sending Packet -- ");
+				LLDPAD_DBG("SeqNo = %d \t AckNo =  %d \n",
 					ctrl_prot->second->SeqNo,
 					ctrl_prot->second->AckNo);
 				/* Send new DCB control & feature TLVs*/
-				somethingChangedLocal(device_name);
+				somethingChangedLocal(device_name, NEAREST_BRIDGE);
 				return dcb_success;
 			}
 
 			if (SendDCBTLV) {
-				printf("  SendDCBTLV is set \n");
+				LLDPAD_DBG("  SendDCBTLV is set \n");
 				/* if you didn't send LLDP message above then
 				 * send one without changing feature TLVs. */
-				printf("  *** Sending Packet -- ");
-				printf("SeqNo = %d \t AckNo =  %d \n",
+				LLDPAD_DBG("  *** Sending Packet -- ");
+				LLDPAD_DBG("SeqNo = %d \t AckNo =  %d \n",
 					ctrl_prot->second->SeqNo,
 					ctrl_prot->second->AckNo);
 				/* Send new DCB TLVs with old feature TLVs. */
-				somethingChangedLocal(device_name);
+				somethingChangedLocal(device_name, NEAREST_BRIDGE);
 			}
 		}
 	}
@@ -4025,27 +3941,27 @@ dcb_result run_dcb_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 	dcb_result result = dcb_success;
 	bool LocalChange = false;
 	u32 i, SubTypeMin, SubTypeMax;
-	int oper;
+	int oper, mask;
 
-	printf("running DCB protocol for %s, flags:%04x\n", device_name,
+	LLDPAD_DBG("running DCB protocol for %s, flags:%04x\n", device_name,
 		EventFlag);
+
+	if (!dcbx_check_active(device_name))
+		return result;
 
 	/* if valid use SubType param, otherwise process all SubTypes */
 	if (Subtype < DCB_MAX_APPTLV) {
 		SubTypeMin = Subtype;
 		SubTypeMax = Subtype+1;
-	}
-	else {
+	} else {
 		SubTypeMin = 0;
 		SubTypeMax = DCB_MAX_APPTLV;
 	}
-	/* Run the feature state machines. */
-	if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PG, DCB_LOCAL_CHANGE_PG)
-		&& (result != dcb_ctrl_vers_not_compatible)) {
-		result = run_feature_protocol(device_name,DCB_LOCAL_CHANGE_PG,
-						SUBTYPE_DEFAULT);
-		LocalChange = true;
-	}
+	/* Run the feature state machines:
+	 *
+	 * Order is important PFC must be run before PG features to
+	 * allow up2tc remappings to account for PFC attributes.
+	 */
 	if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PFC,
 		DCB_LOCAL_CHANGE_PFC)
 		&& (result != dcb_ctrl_vers_not_compatible)) {
@@ -4053,13 +3969,19 @@ dcb_result run_dcb_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 			DCB_LOCAL_CHANGE_PFC, SUBTYPE_DEFAULT);
 		LocalChange = true;
 	}
-	if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_APPTLV,
-		DCB_LOCAL_CHANGE_APPTLV) &&
-		(result != dcb_ctrl_vers_not_compatible)) {
-
+	if (DCB_TEST_FLAGS(EventFlag, DCB_LOCAL_CHANGE_PG, DCB_LOCAL_CHANGE_PG)
+		&& (result != dcb_ctrl_vers_not_compatible)) {
+		result = run_feature_protocol(device_name, DCB_LOCAL_CHANGE_PG,
+						SUBTYPE_DEFAULT);
+		LocalChange = true;
+	}
+	mask = 0;
+	for (i = 0; i < DCB_MAX_APPTLV; i++)
+		mask |= DCB_LOCAL_CHANGE_APPTLV(i);
+	if ((EventFlag & mask) && (result != dcb_ctrl_vers_not_compatible)) {
 		for (i = SubTypeMin; i < SubTypeMax; i++) {
 			result = run_feature_protocol(device_name,
-				DCB_LOCAL_CHANGE_APPTLV, i);
+				DCB_LOCAL_CHANGE_APPTLV(i), i);
 		}
 		LocalChange = true;
 	}
@@ -4067,48 +3989,50 @@ dcb_result run_dcb_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 		DCB_LOCAL_CHANGE_LLINK)
 		&& (result != dcb_ctrl_vers_not_compatible)) {
 
-		for (i = SubTypeMin; i < SubTypeMax; i++) {
-			result = run_feature_protocol(device_name,
+		result = run_feature_protocol(device_name,
 				DCB_LOCAL_CHANGE_LLINK, i);
-		}
 		LocalChange = true;
 	}
-	/* Only allow local or remote change at a time. */
+	/* Only allow local or remote change at a time:
+	 *
+	 * Order is important PFC must be run before PG features to
+	 * allow up2tc remappings to account for PFC attributes.
+	 */
 	if (!LocalChange) {
-		if (DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_PG,
-			DCB_REMOTE_CHANGE_PG)
-			&& (result != dcb_ctrl_vers_not_compatible)) {
-			result = run_feature_protocol(device_name,
-				DCB_REMOTE_CHANGE_PG, SUBTYPE_DEFAULT);
-		}
 		if (DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_PFC,
 			DCB_REMOTE_CHANGE_PFC)
 			&& (result != dcb_ctrl_vers_not_compatible)) {
 			result = run_feature_protocol(device_name,
 				DCB_REMOTE_CHANGE_PFC, SUBTYPE_DEFAULT);
 		}
-		if (DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_APPTLV,
-			DCB_REMOTE_CHANGE_APPTLV)
+		if (DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_PG,
+			DCB_REMOTE_CHANGE_PG)
 			&& (result != dcb_ctrl_vers_not_compatible)) {
+			result = run_feature_protocol(device_name,
+				DCB_REMOTE_CHANGE_PG, SUBTYPE_DEFAULT);
+		}
+		mask = 0;
+		for (i = 0; i < DCB_MAX_APPTLV; i++)
+			mask |= DCB_REMOTE_CHANGE_APPTLV(i);
+		if ((EventFlag & mask) &&
+		    (result != dcb_ctrl_vers_not_compatible)) {
 			for (i = SubTypeMin; i < SubTypeMax; i++) {
 				result = run_feature_protocol(device_name,
-					DCB_REMOTE_CHANGE_APPTLV, i);
+					DCB_REMOTE_CHANGE_APPTLV(i), i);
 			}
 		}
 		if (DCB_TEST_FLAGS(EventFlag, DCB_REMOTE_CHANGE_LLINK,
 			DCB_REMOTE_CHANGE_LLINK)
 			&& (result != dcb_ctrl_vers_not_compatible)) {
-			for (i = SubTypeMin; i < SubTypeMax; i++) {
-				result = run_feature_protocol(device_name,
-					DCB_REMOTE_CHANGE_LLINK, i);
-			}
+			result = run_feature_protocol(device_name,
+				DCB_REMOTE_CHANGE_LLINK, SUBTYPE_DEFAULT);
 		}
 	}
 
 	/* apply all feature setting to the driver: linux only */
 	oper = get_operstate(device_name);
 	if (oper == IF_OPER_UP || oper == IF_OPER_UNKNOWN) {
-		printf("%s: %s: Managed DCB device coming online, program HW\n",
+		LLDPAD_DBG("%s: %s: Managed DCB device coming online, program HW\n",
 			__func__, device_name);
 		set_hw_all(device_name);
 	}

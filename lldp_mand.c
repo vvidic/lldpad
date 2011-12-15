@@ -20,17 +20,17 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdlib.h>
+#include <stdio.h>
 #include <net/if.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
-#include "includes.h"
-#include "common.h"
+#include <errno.h>
 #include "config.h"
 #include "ctrl_iface.h"
 #include "lldp.h"
@@ -39,6 +39,7 @@
 #include "lldpad_shm.h"
 #include "messages.h"
 #include "lldp/l2_packet.h"
+#include "lldp_tlv.h"
 
 extern struct lldp_head lldp_head;
 
@@ -90,15 +91,16 @@ static const struct lldp_mod_ops mand_ops = {
 	.get_arg_handler	= mand_get_arg_handlers,
 };
 
-static struct mand_data *mand_data(const char *ifname)
+static struct mand_data *mand_data(const char *ifname, enum agent_type type)
 {
 	struct mand_user_data *mud;
 	struct mand_data *md = NULL;
 
-	mud = find_module_user_data_by_if(ifname, &lldp_head, LLDP_MOD_MAND);
+	mud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_MAND);
 	if (mud) {
 		LIST_FOREACH(md, &mud->head, entry) {
-			if (!strncmp(ifname, md->ifname, IFNAMSIZ))
+			if (!strncmp(ifname, md->ifname, IFNAMSIZ) &&
+			    (type == md->agenttype))
 				return md;
 		}
 	}
@@ -158,7 +160,7 @@ static int mand_bld_end_tlv(struct mand_data *md)
  * - No validation on data loaded from config other than the subtype
  *
  */
-static int mand_bld_chassis_tlv(struct mand_data *md)
+static int mand_bld_chassis_tlv(struct mand_data *md, struct lldp_agent *agent)
 {
 	int rc = EINVAL;
 	int devtype;
@@ -183,10 +185,10 @@ static int mand_bld_chassis_tlv(struct mand_data *md)
 		goto bld_tlv;
 	
 	/* subtype may differ when LLDP-MED is enabled */
-	if (!is_tlv_txenabled(md->ifname, TLVID_MED(LLDP_MED_RESERVED)))
+	if (!is_tlv_txenabled(md->ifname, agent->type, TLVID_MED(LLDP_MED_RESERVED)))
 		goto bld_config;
 
-	devtype = get_med_devtype(md->ifname);
+	devtype = get_med_devtype(md->ifname, agent->type);
 	LLDPAD_DBG("%s:%s:MED enabled w/ devtype=%d)\n",
 			__func__, md->ifname, devtype);
 	if (devtype == LLDP_MED_DEVTYPE_NETWORK_CONNECTIVITY)
@@ -201,7 +203,7 @@ bld_config:
 	memset(chastr, 0, sizeof(chastr));
 
 	/* load from config */
-	if (get_config_tlvinfo_str(md->ifname, TLVID_NOUI(CHASSIS_ID_TLV),
+	if (get_config_tlvinfo_str(md->ifname, agent->type, TLVID_NOUI(CHASSIS_ID_TLV),
 		 		   chastr, sizeof(chastr)))
 		goto bld_macaddr;
 	length = strlen(chastr) / 2;
@@ -210,7 +212,7 @@ bld_config:
 
 	/* if invalid subtype, fall back to build */
 	if (!CHASSIS_ID_INVALID(chassis.sub)) {
-		LLDPAD_DBG("%s:%s:from config %d bytes:str=%s\n",
+		LLDPAD_DBG("%s:%s:from config %zd bytes:str=%s\n",
 			__func__, md->ifname, length, chastr);
 		/* TODO: validate the loaded tlv */
 		goto bld_tlv;
@@ -249,7 +251,7 @@ bld_netaddr:
 
 	/* use ifname */
 	chassis.sub = CHASSIS_ID_INTERFACE_NAME;
-	strncpy(chassis.id.ifname, md->ifname, IFNAMSIZ);
+	strncpy((char *)chassis.id.ifname, md->ifname, IFNAMSIZ);
 	length = strlen(md->ifname) + sizeof(chassis.sub);
 
 bld_tlv:
@@ -271,8 +273,9 @@ bld_tlv:
 	lldpad_shm_set_msap(md->ifname, CHASSIS_ID_TLV, (char *)tlv->info,
 			    tlv->length);
 
-	set_config_tlvinfo_bin(md->ifname, TLVID_NOUI(CHASSIS_ID_TLV),
-		 	       tlv->info, tlv->length);
+	set_config_tlvinfo_bin(md->ifname, agent->type,
+			       TLVID_NOUI(CHASSIS_ID_TLV),
+			       tlv->info, tlv->length);
 
 	rc = 0;
 out_err:
@@ -308,7 +311,7 @@ out_err:
  * - No validation on data loaded from config other than the subtype
  *
  */
-static int mand_bld_portid_tlv(struct mand_data *md)
+static int mand_bld_portid_tlv(struct mand_data *md, struct lldp_agent *agent)
 {
 	int rc = EINVAL;
 	int devtype;
@@ -334,10 +337,11 @@ static int mand_bld_portid_tlv(struct mand_data *md)
 		goto bld_tlv;
 
 	/* subtype may differ when LLDP-MED is enabled */
-	if (!is_tlv_txenabled(md->ifname, TLVID_MED(LLDP_MED_RESERVED)))
+	if (!is_tlv_txenabled(md->ifname, agent->type,
+			      TLVID_MED(LLDP_MED_RESERVED)))
 		goto bld_config;
 
-	devtype = get_med_devtype(md->ifname);
+	devtype = get_med_devtype(md->ifname, agent->type);
 	LLDPAD_DBG("%s:%s:MED enabled w/ devtype=%d)\n",
 			__func__, md->ifname, devtype);
 
@@ -348,8 +352,9 @@ bld_config:
 	/* load from config */
 
 	memset(porstr, 0, sizeof(porstr));
-	if (get_config_tlvinfo_str(md->ifname, TLVID_NOUI(PORT_ID_TLV),
-		 		   porstr, sizeof(porstr)))
+	if (get_config_tlvinfo_str(md->ifname, agent->type,
+				   TLVID_NOUI(PORT_ID_TLV),
+				   porstr, sizeof(porstr)))
 		goto bld_macaddr;
 	length = strlen(porstr) / 2;
 	if (hexstr2bin(porstr, (u8 *)&portid, length))
@@ -357,7 +362,7 @@ bld_config:
 
 	/* if invalid subtype, fall back to build */
 	if (!PORT_ID_INVALID(portid.sub)) {
-		LLDPAD_DBG("%s:%s:from config %d bytes:str=%s\n",
+		LLDPAD_DBG("%s:%s:from config %zd bytes:str=%s\n",
 			__func__, md->ifname, length, porstr);
 		/* TODO: validate the loaded tlv */
 		goto bld_tlv;
@@ -395,7 +400,7 @@ bld_macaddr:
 
 	/* use ifname */
 	portid.sub = PORT_ID_INTERFACE_NAME;
-	strncpy(portid.id.ifname, md->ifname, IFNAMSIZ);
+	strncpy((char *)portid.id.ifname, md->ifname, IFNAMSIZ);
 	length = strlen(md->ifname) + sizeof(portid.sub);
 
 bld_tlv:
@@ -417,19 +422,19 @@ bld_tlv:
 	lldpad_shm_set_msap(md->ifname, PORT_ID_TLV, (char *)tlv->info,
 			    tlv->length);
 
-	set_config_tlvinfo_bin(md->ifname, TLVID_NOUI(PORT_ID_TLV),
-		 	       tlv->info, tlv->length);
+	set_config_tlvinfo_bin(md->ifname, agent->type,
+			       TLVID_NOUI(PORT_ID_TLV),
+			       tlv->info, tlv->length);
 	rc = 0;
 out_err:
 	return rc;
 }
 
-static int mand_bld_ttl_tlv(struct mand_data *md)
+static int mand_bld_ttl_tlv(struct mand_data *md, struct lldp_agent *agent)
 {
 	int rc = EINVAL;
 	u16 ttl;
 	struct unpacked_tlv *tlv;
-	struct port *port;
 
 	tlv = create_tlv();
 	if (!tlv)
@@ -444,9 +449,8 @@ static int mand_bld_ttl_tlv(struct mand_data *md)
 	}
 	memset(tlv->info, 0, tlv->length);
 
-	port = port_find_by_name(md->ifname);
-	if (port->tx.txTTL)
-		ttl = htons(port->tx.txTTL);
+	if (agent->tx.txTTL)
+		ttl = htons(agent->tx.txTTL);
 	else
 		ttl = htons(DEFAULT_TX_HOLD * DEFAULT_TX_INTERVAL);
 
@@ -459,13 +463,13 @@ out_err:
 	return rc;
 }
 
-struct packed_tlv *mand_gettlv(struct port *port)
+struct packed_tlv *mand_gettlv(struct port *port, struct lldp_agent *agent)
 {
 	struct mand_data *md;
 	struct packed_tlv *ptlv = NULL;
 	size_t size;
 
-	md = mand_data(port->ifname);
+	md = mand_data(port->ifname, agent->type);
 	if (!md) {
 		LLDPAD_DBG("%s:%s: not found port\n", __func__, port->ifname);
 		goto out_err;
@@ -509,7 +513,7 @@ static void mand_free_tlv(struct mand_data *md)
 }
 
 /* build unpacked tlvs */
-static int mand_bld_tlv(struct mand_data *md)
+static int mand_bld_tlv(struct mand_data *md, struct lldp_agent *agent)
 {
 	int rc = EPERM;
 
@@ -518,20 +522,17 @@ static int mand_bld_tlv(struct mand_data *md)
 		goto out_err;
 	}
 
-	if (!init_cfg())
-		goto out_err;
-
-	if (mand_bld_chassis_tlv(md)) {
+	if (mand_bld_chassis_tlv(md, agent)) {
 		LLDPAD_DBG("%s:%s:mand_bld_chassis_tlv() failed\n",
 				__func__, md->ifname);
 		goto out_err;
 	}
-	if (mand_bld_portid_tlv(md)) {
+	if (mand_bld_portid_tlv(md, agent)) {
 		LLDPAD_DBG("%s:%s:mand_bld_portid_tlv() failed\n",
 				__func__, md->ifname);
 		goto out_err;
 	}
-	if (mand_bld_ttl_tlv(md)) {
+	if (mand_bld_ttl_tlv(md, agent)) {
 		LLDPAD_DBG("%s:%s:mand_bld_ttl_tlv() failed\n",
 				__func__, md->ifname);
 		goto out_err;
@@ -561,11 +562,11 @@ static void mand_free_data(struct mand_user_data *mud)
 	}
 }
 
-void mand_ifdown(char *ifname)
+void mand_ifdown(char *ifname, struct lldp_agent *agent)
 {
 	struct mand_data *md;
 
-	md = mand_data(ifname);
+	md = mand_data(ifname, agent->type);
 	if (!md)
 		goto out_err;
 
@@ -579,12 +580,12 @@ out_err:
 	return;
 }
 
-void mand_ifup(char *ifname)
+void mand_ifup(char *ifname, struct lldp_agent *agent)
 {
 	struct mand_data *md;
 	struct mand_user_data *mud;
 
-	md = mand_data(ifname);
+	md = mand_data(ifname, agent->type);
 	if (md) {
 		LLDPAD_INFO("%s:%s exists\n", __func__, ifname); 
 		goto out_err;
@@ -597,7 +598,9 @@ void mand_ifup(char *ifname)
 	}
 	memset(md, 0, sizeof(struct mand_data));
 	strncpy(md->ifname, ifname, IFNAMSIZ);
-	if (mand_bld_tlv(md)) {
+	md->agenttype = agent->type;
+
+	if (mand_bld_tlv(md, agent)) {
 		LLDPAD_INFO("%s:%s mand_bld_tlv failed\n", __func__, ifname); 
 		free(md);
 		goto out_err;
@@ -607,7 +610,7 @@ void mand_ifup(char *ifname)
 	md->rebuild_chassis = 1; 
 	/* portid is built once and remains constant */
 	md->rebuild_portid = 1; 
-	mud = find_module_user_data_by_if(ifname, &lldp_head, LLDP_MOD_MAND);
+	mud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_MAND);
 	LIST_INSERT_HEAD(&mud->head, md, entry);
 	LLDPAD_INFO("%s:port %s added\n", __func__, ifname); 
 	return;

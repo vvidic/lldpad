@@ -20,8 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
@@ -29,6 +28,7 @@
 #define  _EVENT_IFACE_H_
 
 int event_iface_init(void);
+int event_iface_init_user_space(void);
 int event_iface_deinit(void);
 int oper_add_device(char *device_name);
 

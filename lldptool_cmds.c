@@ -20,14 +20,13 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <ctype.h>
-#include "includes.h"
-#include "common.h"
 #include "clif.h"
 #include "dcb_types.h"
 #include "lldptool.h"
@@ -36,33 +35,39 @@
 #include "lldpad.h"
 #include "lldp.h"
 #include "lldp_mod.h"
+#include "messages.h"
+#include "lldp_util.h"
 
 static char *print_status(cmd_status status);
 
-int render_cmd(struct cmd *cmd, char *arg, char *argvalue)
+static int render_cmd(struct cmd *cmd, int argc, char **args, char **argvals)
 {
 	int len;
+	int i;
 
 	len = sizeof(cmd->obuf);
 
 	/* all command messages begin this way */
-	snprintf(cmd->obuf, len, "%c%08x%c%1x%02x%08x%02x%s",
+	snprintf(cmd->obuf, len, "%c%08x%c%1x%02x%08x%02x%s%02x",
 		MOD_CMD, cmd->module_id, CMD_REQUEST, CLIF_MSG_VERSION,
 		cmd->cmd, cmd->ops, (unsigned int) strlen(cmd->ifname),
-		cmd->ifname);
+		cmd->ifname, cmd->type);
 
 	/* if the command is a tlv command, add the tlvid to the message */
 	if (cmd->cmd == cmd_gettlv || cmd->cmd == cmd_settlv)
 		snprintf(cmd->obuf+strlen(cmd->obuf), len-strlen(cmd->obuf),
 			"%08x", cmd->tlvid);
 
-	/* add any arg and argvalue to the command message */
-	if (arg)
-		snprintf(cmd->obuf+strlen(cmd->obuf), len-strlen(cmd->obuf),
-			"%02x%s", (unsigned int)strlen(arg), arg);
-	if (argvalue)
-		snprintf(cmd->obuf+strlen(cmd->obuf), len-strlen(cmd->obuf),
-			"%04x%s", (unsigned int)strlen(argvalue), argvalue);
+	/* add any args and argvals to the command message */
+	for (i = 0; i < argc; i++) {
+		if (args[i])
+			snprintf(cmd->obuf+strlen(cmd->obuf), len-strlen(cmd->obuf),
+				"%02x%s", (unsigned int)strlen(args[i]), args[i]);
+		if (argvals[i])
+			snprintf(cmd->obuf+strlen(cmd->obuf),
+				 len-strlen(cmd->obuf), "%04x%s",
+				 (unsigned int)strlen(argvals[i]), argvals[i]);
+	}
 
 	return strlen(cmd->obuf);
 }
@@ -72,7 +77,7 @@ int parse_response(char *buf)
 	return hex2int(buf+CLIF_STAT_OFF);
 }
 
-void get_arg_value(char *str, char **arg, char **argvalue)
+void get_arg_value(char *str, char **arg, char **argval)
 {
 	int i;
 
@@ -86,7 +91,7 @@ void get_arg_value(char *str, char **arg, char **argvalue)
 
 	if (i < strlen(str)) {
 		str[i] = '\0';
-		*argvalue = &str[i+1];
+		*argval = &str[i+1];
 	}
 	*arg = str;
 }
@@ -94,90 +99,214 @@ void get_arg_value(char *str, char **arg, char **argvalue)
 int cli_cmd_getstats(struct clif *clif, int argc, char *argv[],
 			struct cmd *cmd, int raw)
 {
-	char *arg = NULL;
-	char *argvalue = NULL;
+	char **args;
+	char **argvals;
 
-	render_cmd(cmd, arg, argvalue);
+	args = calloc(argc, sizeof(char *));
+	if (!args)
+		return cmd_failed;
+	argvals = calloc(argc, sizeof(char *));
+	if (!argvals) {
+		free(args);
+		return cmd_failed;
+	}
+
+	render_cmd(cmd, argc, args, argvals);
+	free(args);
+	free(argvals);
 	return clif_command(clif, cmd->obuf, raw);
 }
 
 int cli_cmd_gettlv(struct clif *clif, int argc, char *argv[],
 			struct cmd *cmd, int raw)
 {
-	char *arg = NULL;
-	char *argvalue = NULL;
+	int numargs = 0;
+	char **args;
+	char **argvals;
+	int i;
 
-	if (argc > 0)
-		get_arg_value(argv[0], &arg, &argvalue);
+	args = calloc(argc, sizeof(char *));
+	if (!args)
+		return cmd_failed;
+
+	argvals = calloc(argc, sizeof(char *));
+	if (!argvals) {
+		free(args);
+		return cmd_failed;
+	}
+
+	for (i = 0; i < argc; i++)
+		get_arg_value(argv[i], &args[i], &argvals[i]);
+	numargs = i;
 
 	/* default is local tlv query */
 	if (!(cmd->ops & op_neighbor))
 		cmd->ops |= op_local;
-	if (arg)
-		cmd->ops |= op_arg;
 
-	if (argvalue) {
-		printf("%s\n", print_status(cmd_invalid));
-		return cmd_invalid;
+	if (numargs) {
+		/* Only commands with the config option should have
+		 * arguments.
+		 */
+		if (!(cmd->ops & op_config)) {
+			printf("%s\n", print_status(cmd_invalid));
+			goto out;
+		}
+
+		/* Commands to get neighbor TLVs cannot have
+		 * arguments.
+		 */
+		if (cmd->ops & op_neighbor) {
+			printf("%s\n", print_status(cmd_invalid));
+			goto out;
+		}
+		cmd->ops |= op_arg;
 	}
 
-	render_cmd(cmd, arg, argvalue);
+
+	for (i = 0; i < numargs; i++) {
+		if (argvals[i]) {
+			printf("%s\n", print_status(cmd_invalid));
+			goto out;
+		}
+	}
+
+	render_cmd(cmd, argc, args, argvals);
+	free(args);
+	free(argvals);
 	return clif_command(clif, cmd->obuf, raw);
+out:
+	free(args);
+	free(argvals);
+	return cmd_invalid;
 }
 
 int cli_cmd_settlv(struct clif *clif, int argc, char *argv[],
 			struct cmd *cmd, int raw)
 {
-	char *arg = NULL;
-	char *argvalue = NULL;
+	int numargs = 0;
+	char **args;
+	char **argvals;
+	int i;
 
-	if (argc > 0)
-		get_arg_value(argv[0], &arg, &argvalue);
+	args = calloc(argc, sizeof(char *));
+	if (!args)
+		return cmd_failed;
 
-	if (!argvalue) {
-		printf("%s\n", print_status(cmd_invalid));
-		return cmd_invalid;
+	argvals = calloc(argc, sizeof(char *));
+	if (!argvals) {
+		free(args);
+		return cmd_failed;
 	}
 
-	render_cmd(cmd, arg, argvalue);
+	for (i = 0; i < argc; i++)
+		get_arg_value(argv[i], &args[i], &argvals[i]);
+	numargs = i;
+
+	for (i = 0; i < numargs; i++) {
+		if (!argvals[i]) {
+			printf("%s\n", print_status(cmd_invalid));
+			goto out;
+		}
+	}
+
+	if (numargs)
+		cmd->ops |= (op_arg | op_argval);
+
+	render_cmd(cmd, argc, args, argvals);
+	free(args);
+	free(argvals);
 	return clif_command(clif, cmd->obuf, raw);
+out:
+	free(args);
+	free(argvals);
+	return cmd_invalid;
 }
 
 int cli_cmd_getlldp(struct clif *clif, int argc, char *argv[],
 			struct cmd *cmd, int raw)
 {
-	char *arg = NULL;
-	char *argvalue = NULL;
+	int numargs = 0;
+	int numargvals = 0;
+	char **args;
+	char **argvals;
+	int i;
 
-	if (argc > 0)
-		get_arg_value(argv[0], &arg, &argvalue);
+	args = calloc(argc, sizeof(char *));
+	if (!args)
+		return cmd_failed;
 
-	if (!arg || argvalue) {
-		printf("%s\n", print_status(cmd_invalid));
-		return cmd_invalid;
+	argvals = calloc(argc, sizeof(char *));
+	if (!argvals) {
+		free(args);
+		return cmd_failed;
 	}
 
+	for (i = 0; i < argc; i++)
+		get_arg_value(argv[i], &args[i], &argvals[i]);
+	numargs = i;
 
-	render_cmd(cmd, arg, argvalue);
+	for (i = 0; i < numargs; i++)
+		if (argvals[i])
+			numargvals++;
+
+	if (!numargs || numargvals) {
+		printf("%s\n", print_status(cmd_invalid));
+		goto out;
+	}
+
+	if (numargs)
+		cmd->ops |= op_arg;
+
+	render_cmd(cmd, argc, args, argvals);
+	free(args);
+	free(argvals);
 	return clif_command(clif, cmd->obuf, raw);
+out:
+	free(args);
+	free(argvals);
+	return cmd_invalid;
 }
 
 int cli_cmd_setlldp(struct clif *clif, int argc, char *argv[],
 			struct cmd *cmd, int raw)
 {
-	char *arg = NULL;
-	char *argvalue = NULL;
+	int numargs = 0;
+	char **args;
+	char **argvals;
+	int i;
 
-	if (argc > 0)
-		get_arg_value(argv[0], &arg, &argvalue);
+	args = calloc(argc, sizeof(char *));
+	if (!args)
+		return cmd_failed;
 
-	if (!argvalue) {
-		printf("%s\n", print_status(cmd_invalid));
-		return cmd_invalid;
+	argvals = calloc(argc, sizeof(char *));
+	if (!argvals) {
+		free(args);
+		return cmd_failed;
 	}
 
-	render_cmd(cmd, arg, argvalue);
+	for (i = 0; i < argc; i++)
+		get_arg_value(argv[i], &args[i], &argvals[i]);
+	numargs = i;
+
+	for (i = 0; i < numargs; i++) {
+		if (!argvals[i]) {
+			printf("%s\n", print_status(cmd_invalid));
+			goto out;
+		}
+	}
+
+	if (numargs)
+		cmd->ops |= (op_arg | op_argval);
+
+	render_cmd(cmd, argc, args, argvals);
+	free(args);
+	free(argvals);
 	return clif_command(clif, cmd->obuf, raw);
+out:
+	free(args);
+	free(argvals);
+	return cmd_invalid;
 }
 
 
@@ -193,7 +322,10 @@ static char *print_status(cmd_status status)
 		str = "Failed";
 		break;
 	case cmd_device_not_found:
-		str = "Device not found or link down";
+		str = "Device not found or inactive";
+		break;
+	case cmd_agent_not_found:
+		str = "Agent instance for device not found";
 		break;
 	case cmd_invalid:
 		str = "Invalid command";
@@ -209,6 +341,12 @@ static char *print_status(cmd_status status)
 		break;
 	case cmd_not_capable:
 		str = "Device not capable";
+		break;
+	case cmd_not_applicable:
+		str = "Command not applicable";
+		break;
+	case cmd_no_access:
+		str = "Access denied";
 		break;
 	default:
 		str = "Unknown status";
@@ -233,45 +371,43 @@ u32 get_tlvid(u16 tlv_type, char* ibuf)
 
 static int print_arg_value(char *ibuf)
 {
-	int ilen;
-	int ioff =0;
-	char *arg = NULL;
-	char *argvalue = NULL;
-	u8 arglen;
-	u16 argvalue_len;
+	int ioff = 0;
+	char **args;
+	char **argvals;
+	int numargs;
+	int i, offset;
+	int ilen = strlen(ibuf);
 
-	ilen = strlen(ibuf);
-
-	/* check for an arg and argvalue */
-	if (ilen - ioff > 2*sizeof(arglen)) {
-		hexstr2bin(ibuf+ioff, &arglen, sizeof(arglen));
-		ioff += 2*sizeof(arglen);
-		if (ilen - ioff >= arglen) {
-			arg = ibuf+ioff;
-			ioff += arglen;
-
-			if (ilen - ioff > 2*sizeof(argvalue_len)) {
-				hexstr2bin(ibuf+ioff, (u8 *)&argvalue_len,
-					   sizeof(argvalue_len));
-				argvalue_len = ntohs(argvalue_len);
-				ioff += 2*sizeof(argvalue_len);
-				if (ilen - ioff >= argvalue_len) {
-					argvalue = ibuf+ioff;
-					ioff += argvalue_len;
-				}
-			}
+	/* count args and argvalus */
+	offset = ioff;
+	for (numargs = 0; (ilen - offset) > 2; numargs++) {
+		offset += 2;
+		if (ilen - offset > 0) {
+			offset++;
+			if (ilen - offset > 4)
+				offset += 4;
 		}
 	}
 
-	if (arg) {
-		arg[arglen] = '\0';
-		printf("%s", arg);
-	}
-	if (argvalue) {
-		argvalue[argvalue_len] = '\0';
-		printf(" = %s\n", argvalue);
+	args = calloc(numargs, sizeof(char *));
+	if (!args)
+		return cmd_failed;
+
+	argvals = calloc(numargs, sizeof(char *));
+	if (!argvals) {
+		free(args);
+		return cmd_failed;
 	}
 
+	numargs = get_arg_val_list(ibuf, ilen, &ioff, args, argvals);
+
+	for (i = 0; i < numargs; i++) {
+		printf("%s", args[i]);
+		printf("=%s\n", argvals[i]);
+	}
+
+	free(args);
+	free(argvals);
 	return ioff;
 }
 
@@ -294,14 +430,15 @@ static void print_tlvs(struct cmd *cmd, char *ibuf)
 
 	ilen = strlen(ibuf);
 
-	if (cmd->ops & op_arg)
+	if (cmd->ops & op_config)
 		offset = print_arg_value(ibuf);
 
 	ilen = strlen(ibuf + offset);
 
 	while (ilen > 0) {
 		if (ilen < 2*sizeof(u16)) {
-			printf("corrupted TLV\n");
+			printf("corrupted TLV ilen=%d, tlv_len=%d\n",
+				ilen, tlv_len);
 			break;
 		}
 		hexstr2bin(ibuf+offset, (u8 *)&tlv_type, sizeof(tlv_type));
@@ -313,7 +450,8 @@ static void print_tlvs(struct cmd *cmd, char *ibuf)
 		ilen -= 2*sizeof(u16);
 
 		if (ilen < 2*tlv_len) {
-			printf("corrupted TLV\n");
+			printf("corrupted TLV ilen = %d, tlv_len=%d\n",
+				ilen, tlv_len);
 			break;
 		}
 
@@ -422,6 +560,8 @@ void print_cmd_response(char *ibuf, int status)
 		break;
 	case cmd_settlv:
 	case cmd_set_lldp:
+		printf("%s", ibuf+ioff);
+		break;
 	default:
 		return;
 	}

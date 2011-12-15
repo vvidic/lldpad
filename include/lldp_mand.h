@@ -20,8 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
@@ -29,11 +28,13 @@
 #define _LLDP_MAND_H
 
 #include "lldp_mod.h"
+#include "lldp_mand_cmds.h"
 
 #define LLDP_MOD_MAND	1
 
 struct mand_data {
 	char ifname[IFNAMSIZ];
+	enum agent_type agenttype;
 	struct unpacked_tlv *chassis;
 	struct unpacked_tlv *portid;
 	struct unpacked_tlv *ttl;
@@ -49,10 +50,7 @@ struct mand_user_data {
 
 struct lldp_module *mand_register(void);
 void mand_unregister(struct lldp_module *mod);
-struct packed_tlv *mand_gettlv(struct port *port);
-void mand_ifdown(char *);
-void mand_ifup(char *);
-int mand_clif_cmd(void *, struct sockaddr_un *,
-		  socklen_t , char *, int, char *);
-
+struct packed_tlv *mand_gettlv(struct port *, struct lldp_agent *);
+void mand_ifdown(char *, struct lldp_agent *);
+void mand_ifup(char *, struct lldp_agent *);
 #endif /* _LLDP_MAND_H */

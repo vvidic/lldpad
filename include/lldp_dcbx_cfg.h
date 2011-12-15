@@ -20,22 +20,19 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef _LLDP_DCBX_CFG_H_
 #define _LLDP_DCBX_CFG_H_
 
-#include "dcb_protocol.h"
-
 #define DCBX_SETTING "dcbx"
 
 void dcbx_default_cfg_file(void);
 int get_dcb_enable_state(char *device_name, int *result);
-dcb_result save_dcb_enable_state(char *device_name, int dcb_enable);
+int save_dcb_enable_state(char *device_name, int dcb_enable);
 int get_dcbx_version(int *result);
-dcb_result save_dcbx_version(int dcbx_version);
+int save_dcbx_version(int dcbx_version);
 
 #endif // _LLDP_DCBX_CFG_H_

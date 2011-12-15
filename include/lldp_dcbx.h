@@ -20,8 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
@@ -29,8 +28,8 @@
 #define _LLDP_DCBX_H
 
 #include <sys/un.h>
+#include <netinet/in.h>
 #include "lldpad.h"
-#include "dcb_osdep.h"
 
 #define LLDP_MOD_DCBX 0x001b2101
 
@@ -45,6 +44,8 @@ struct dcbx_manifest {
 };
 
 struct dcbx_tlvs {
+	bool active;
+	bool rxed_tlvs;
 	u16  dcbdu;
 	u8   dcbx_st;
 	char ifname[IFNAMSIZ];
@@ -75,14 +76,18 @@ struct dcbx_tlvs *dcbx_data(const char *);
 }
 #endif
 
-struct packed_tlv *dcbx_gettlv(struct port *port);
-int dcbx_rchange(struct port *port,  struct unpacked_tlv *tlv);
-u8 dcbx_mibDeleteObjects(struct port *port);
-void dcbx_ifup(char *device_name);
-void dcbx_ifdown(char *device_name);
+int dcbx_tlvs_rxed(const char *ifname, struct lldp_agent *);
+int dcbx_check_active(const char *ifname);
+int dcbx_get_legacy_version(const char *ifname);
+
+struct packed_tlv *dcbx_gettlv(struct port *, struct lldp_agent *);
+int dcbx_rchange(struct port *, struct lldp_agent *, struct unpacked_tlv *);
+u8 dcbx_mibDeleteObjects(struct port *, struct lldp_agent *);
+void dcbx_ifup(char *, struct lldp_agent *);
+void dcbx_ifdown(char *, struct lldp_agent *);
 struct lldp_module *dcbx_register(void);
 void dcbx_unregister(struct lldp_module *);
 int dcbx_clif_cmd(void *, struct sockaddr_un *,
-		  socklen_t , char *, int, char *);
+		  socklen_t , char *, int, char *, int);
 
 #endif /* _LLDP_DCBX_H */
