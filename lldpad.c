@@ -25,34 +25,39 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <syslog.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <fcntl.h>
 #include <errno.h>
-#include "common.h"
+#include <signal.h>
+#include <unistd.h>
 #include "eloop.h"
 #include "lldpad.h"
 #include "event_iface.h"
 #include "messages.h"
 #include "version.h"
+#include "lldp/ports.h"
+#include "lldp/l2_packet.h"
 #include "lldp_mand.h"
 #include "lldp_basman.h"
 #include "lldp_dcbx.h"
 #include "lldp_med.h"
 #include "lldp_8023.h"
+#include "lldp_evb.h"
+#include "lldp_vdp.h"
+#include "lldp_8021qaz.h"
 #include "config.h"
 #include "lldpad_shm.h"
-#include "clif.h"
 #include "lldp/agent.h"
+#include "lldp/l2_packet.h"
+#include "clif.h"
 
 /*
  * insert to head, so first one is last
@@ -63,12 +68,15 @@ struct lldp_module *(*register_tlv_table[])(void) = {
 	dcbx_register,
 	med_register,
 	ieee8023_register,
+	evb_register,
+	vdp_register,
+	ieee8021qaz_register,
 	NULL,
 };
 
-extern u8 gdcbx_subtype;
-
 char *cfg_file_name = NULL;
+bool daemonize = 0;
+int loglvl = LOG_WARNING;
 
 static const char *lldpad_version =
 "lldpad v" VERSION_STR "\n"
@@ -118,7 +126,8 @@ static void usage(void)
 		"   -d  run daemon in the background\n"
 		"   -k  terminate current running lldpad\n"
 		"   -s  remove lldpad state records\n"
-		"   -v  show version\n");
+		"   -v  show version\n"
+		"   -V  set syslog level\n");
 
 	exit(1);
 }
@@ -133,15 +142,31 @@ void send_event(int level, u32 moduleid, char *msg)
 	struct clif_data *cd = NULL;
 
 	cd = (struct clif_data *) eloop_get_user_data();
-	if (cd) {
+	if (cd)
 		ctrl_iface_send(cd, level, moduleid, msg, strlen(msg));
-	}
 }
 
+void lldpad_reconfig(int sig, void *eloop_ctx, void *signal_ctx)
+{
+	LLDPAD_WARN("lldpad: SIGHUP received reinit...");
+	/* Send LLDP SHUTDOWN frames and deinit modules */
+	clean_lldp_agents();
+	deinit_modules();
+	remove_all_adapters();
+	remove_all_bond_ports();
+	destroy_cfg();
+
+	/* Reinit config file and modules */
+	init_cfg();
+	init_modules("");
+	init_ports();
+
+	return;
+}
 
 int main(int argc, char *argv[])
 {
-	int c, daemonize = 0;
+	int c;
 	struct clif_data *clifd;
 	int fd;
 	char buf[32];
@@ -150,7 +175,6 @@ int main(int argc, char *argv[])
 	int print_v = 0;
 	pid_t pid;
 	int cnt;
-	int loglvl = LOG_WARNING;
 
 	for (;;) {
 		c = getopt(argc, argv, "dhkvsf:V:");
@@ -165,7 +189,7 @@ int main(int argc, char *argv[])
 			cfg_file_name = strdup(optarg);
 			break;
 		case 'd':
-			daemonize++;
+			daemonize = 1;
 			break;
 		case 'k':
 			killme = 1;
@@ -198,9 +222,8 @@ int main(int argc, char *argv[])
 		exit(0);
 	}
 
-	if (cfg_file_name == NULL) {
+	if (cfg_file_name == NULL)
 		cfg_file_name = DEFAULT_CFG_FILE;
-	}
 
 	if (shm_remove) {
 		mark_lldpad_shm_for_removal();
@@ -212,14 +235,12 @@ int main(int argc, char *argv[])
 
 		if (pid < 0) {
 			perror("lldpad_shm_getpid failed");
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s", "lldpad_shm_getpid failed");
+			LLDPAD_WARN("lldpad_shm_getpid failed\n");
 			exit (1);
 		} else if (pid == PID_NOT_SET) {
 			if (!lldpad_shm_setpid(DONT_KILL_PID)) {
 				perror("lldpad_shm_setpid failed");
-				log_message(MSG_ERR_SERVICE_START_FAILURE,
-					"%s", "lldpad_shm_setpid failed");
+				LLDPAD_WARN("lldpad_shm_setpid failed\n");
 				exit (1);
 			} else {
 				exit(0);
@@ -234,32 +255,25 @@ int main(int argc, char *argv[])
 				usleep(10000);
 
 			if (cnt >= 1000) {
-				fprintf(stderr, "failed to kill lldpad %d\n", pid);
-				log_message(MSG_ERR_SERVICE_START_FAILURE,
-					"%s", "lldpad failed to die");
+				LLDPAD_WARN("failed to kill lldpad %d\n", pid);
 				exit (1);
 			}
 		} else {
 			perror("lldpad kill failed");
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s", "kill lldpad failed");
+			LLDPAD_WARN("lldpad kill failed\n");
 		}
 		if (!lldpad_shm_setpid(DONT_KILL_PID)) {
 			perror("lldpad_shm_setpid failed after kill");
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s", "lldpad_shm_setpid failed after kill");
+			LLDPAD_WARN("lldpad_shm_setpid failed after kill");
 			exit (1);
 		}
 
-		destroy_cfg();
- 
 		exit (0);
 	}
 
 	fd = open(PID_FILE, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 	if (fd < 0) {
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "error opening lldpad lock file");
+		LLDPAD_ERR("error opening lldpad lock file");
 		exit(1);
 	}
 
@@ -270,12 +284,10 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "pid of existing lldpad is %s\n",
 					buf);
 			}
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s", "lldpad already running");
+			LLDPAD_ERR("lldpad already running");
 		} else {
 			perror("error locking lldpad lock file");
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s", "error locking lldpad lock file");
+			LLDPAD_ERR("error locking lldpad lock file");
 		}
 		exit(1);
 	}
@@ -283,43 +295,34 @@ int main(int argc, char *argv[])
 	/* initialize lldpad user data */
 	clifd = malloc(sizeof(struct clif_data));
 	if (clifd == NULL) {
-		fprintf(stderr, "failed to malloc user data\n");
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "failed to malloc user data");
+		LLDPAD_ERR("failed to malloc user data\n");
 		exit(1);
 	}
 
-	clifd->ctrl_interface = (char *) CLIF_IFACE_DIR;
-	strcpy(clifd->iface, CLIF_IFACE_IFNAME);
-	clifd->ctrl_interface_gid_set = 0;
-	clifd->ctrl_interface_gid = 0;
+	/* initialize lldpad configuration file */
+	if (!init_cfg()) {
+		LLDPAD_ERR("failed to initialize configuration file\n");
+		exit(1);
+	}
 
 	if (eloop_init(clifd)) {
-		fprintf(stderr, "failed to initialize event loop\n");
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "failed to initialize event loop");
+		LLDPAD_ERR("failed to initialize event loop\n");
 		exit(1);
 	}
 
 	/* initialize the client interface socket before daemonize */
 	if (ctrl_iface_init(clifd) < 0) {
-		fprintf(stderr, "failed to register client interface\n");
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "failed to register client interface");
+		LLDPAD_ERR("failed to register client interface\n");
 		exit(1);
 	}
 
-	if (daemonize && os_daemonize(PID_FILE)) {
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "error daemonizing lldpad");
+	if (daemonize && daemon(1, 0)) {
+		LLDPAD_ERR("error daemonizing lldpad");
 		goto out;
 	}
 
 	if (lseek(fd, 0, SEEK_SET) < 0) {
-		if (!daemonize)
-			fprintf(stderr, "error seeking lldpad lock file\n");
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "error seeking lldpad lock file");
+		LLDPAD_ERR("error seeking lldpad lock file\n");
 		exit(1);
 	}
 
@@ -332,22 +335,19 @@ int main(int argc, char *argv[])
 
 	pid = lldpad_shm_getpid();
 	if (pid < 0) {
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "error getting shm pid");
+		LLDPAD_ERR("error getting shm pid");
 		unlink(PID_FILE);
-		exit (1);
+		exit(1);
 	} else if (pid == PID_NOT_SET) {
 		if (!lldpad_shm_setpid(getpid())) {
 			perror("lldpad_shm_setpid failed");
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s", "error setting shm pid");
+			LLDPAD_ERR("lldpad_shm_setpid failed\n");
 			unlink(PID_FILE);
 			exit (1);
 		}
 	} else if (pid != DONT_KILL_PID) {
 		if (!kill(pid, 0)) {
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s", "lldpad already running");
+			LLDPAD_ERR("lldpad already running");
 			unlink(PID_FILE);
 			exit(1);
 		}
@@ -356,8 +356,7 @@ int main(int argc, char *argv[])
 		 */
 		if (!lldpad_shm_setpid(getpid())) {
 			perror("lldpad_shm_setpid failed");
-			log_message(MSG_ERR_SERVICE_START_FAILURE,
-				"%s", "error overwriting shm pid");
+			LLDPAD_ERR("error overwriting shm pid");
 			unlink(PID_FILE);
 			exit (1);
 		}
@@ -366,53 +365,60 @@ int main(int argc, char *argv[])
 	openlog("lldpad", LOG_CONS | LOG_PID, LOG_DAEMON);
 	setlogmask(LOG_UPTO(loglvl));
 
-	if (check_cfg_file()) {
+	if (check_cfg_file())
+		exit(1);
+
+	/* setup event netlink interface for user space processes.
+	 * This needs to be setup first to ensure it gets lldpads
+	 * pid as netlink address.
+	 */
+	if (event_iface_init_user_space() < 0) {
+		LLDPAD_ERR("lldpad failed to start - failed to register user space event interface\n");
 		exit(1);
 	}
 
 	init_modules("");
 
-
 	eloop_register_signal_terminate(eloop_terminate, NULL);
+	eloop_register_signal_reconfig(lldpad_reconfig, NULL); 
 
 	/* setup LLDP agent */
-	if (!start_lldp_agent()) {
-		if (!daemonize)
-			fprintf(stderr, "failed to initialize LLDP agent\n");
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "failed to initialize LLDP agent");
+	if (!start_lldp_agents()) {
+		LLDPAD_ERR("failed to initialize LLDP agent\n");
 		exit(1);
 	}
-
-	ctrl_iface_register(clifd);
-
-	/* Find available interfaces, read in the lldpad.conf file and
-	 * add adapters */
-	init_ports();
 
 	/* setup event RT netlink interface */
 	if (event_iface_init() < 0) {
-		if (!daemonize)
-			fprintf(stderr, "failed to register event interface\n");
-		log_message(MSG_ERR_SERVICE_START_FAILURE,
-			"%s", "failed to register event interface");
+		LLDPAD_ERR("failed to register event interface\n");
 		exit(1);
 	}
 
-	LLDPAD_WARN("%s is starting", argv[0]);
-	eloop_run();
-	LLDPAD_WARN("%s is stopping", argv[0]);
+	/* Find available interfaces and add adapters */
+	init_ports();
 
-	clean_lldp_agent();
+	if (ctrl_iface_register(clifd) < 0) {
+		if (!daemonize)
+			fprintf(stderr, "failed to register control interface\n");
+		LLDPAD_ERR("lldpad failed to start - failed to register control interface\n");
+		exit(1);
+	}
+
+	eloop_run();
+
+	clean_lldp_agents();
 	deinit_modules();
 	remove_all_adapters();
+	remove_all_bond_ports();
 	ctrl_iface_deinit(clifd);  /* free's clifd */
 	event_iface_deinit();
-	stop_lldp_agent();
+	stop_lldp_agents();
  out:
 	destroy_cfg();
 	closelog();
 	unlink(PID_FILE);
 	eloop_destroy();
+	if (eloop_terminated())
+		exit(0);
 	exit(1);
 }

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2011 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -20,13 +20,10 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "includes.h"
-#include "common.h"
 #include <stdio.h>
 #include <syslog.h>
 #include <sys/un.h>
@@ -45,19 +42,25 @@
 #include "clif_msgs.h"
 #include "lldp/states.h"
 
-static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *);
-static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *);
-static int get_arg_med_devtype(struct cmd *, char *, char *, char *);
-static int set_arg_med_devtype(struct cmd *, char *, char *, char *);
+static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int test_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int get_arg_med_devtype(struct cmd *, char *, char *, char *, int);
+static int set_arg_med_devtype(struct cmd *, char *, char *, char *, int);
+static int test_arg_med_devtype(struct cmd *, char *, char *, char *, int);
 
 static struct arg_handlers arg_handlers[] = {
-	{ ARG_TLVTXENABLE, get_arg_tlvtxenable, set_arg_tlvtxenable },
-	{ ARG_MED_DEVTYPE, get_arg_med_devtype, set_arg_med_devtype },
+	{ ARG_TLVTXENABLE, TLV_ARG,
+		get_arg_tlvtxenable, set_arg_tlvtxenable,
+		test_arg_tlvtxenable },
+	{ ARG_MED_DEVTYPE, TLV_ARG,
+		get_arg_med_devtype, set_arg_med_devtype,
+		test_arg_med_devtype },
 	{ NULL }
 };
 
 static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+			       char *obuf, int obuf_len)
 {
 	int value;
 	char *s;
@@ -82,8 +85,8 @@ static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 		snprintf(arg_path, sizeof(arg_path), "%s%08x.%s",
 			 TLVID_PREFIX, cmd->tlvid, arg);
 
-		if (get_config_setting(cmd->ifname, arg_path, (void *)&value,
-					CONFIG_TYPE_BOOL))
+		if (get_config_setting(cmd->ifname, cmd->type, arg_path,
+				       &value, CONFIG_TYPE_BOOL))
 			value = false;
 		break;
 	case INVALID_TLVID:
@@ -97,14 +100,14 @@ static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 	else
 		s = VAL_NO;
 
-	sprintf(obuf, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
-		(unsigned int)strlen(s), s);
+	snprintf(obuf, obuf_len, "%02zx%s%04zx%s",
+		strlen(arg), arg, strlen(s), s);
 
 	return cmd_success;
 }
 
-static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+static int _set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len, bool test)
 {
 	int value;
 	char arg_path[256];
@@ -139,20 +142,37 @@ static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 	else
 		return cmd_invalid;
 
+	if (test)
+		return cmd_success;
+
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
 		 cmd->tlvid, arg);
 
-	if (set_config_setting(cmd->ifname, arg_path, (void *)&value,
-			       CONFIG_TYPE_BOOL))
+	if (set_config_setting(cmd->ifname, cmd->type, arg_path,
+			       &value, CONFIG_TYPE_BOOL))
 		return cmd_failed;
 
-	somethingChangedLocal(cmd->ifname);
+	snprintf(obuf, obuf_len, "enableTx = %s\n", value ? "yes" : "no");
+
+	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
 }
 
+static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_tlvtxenable(cmd, arg, argvalue, obuf, obuf_len, false);
+}
+
+static int test_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_tlvtxenable(cmd, arg, argvalue, obuf, obuf_len, true);
+}
+
 static int get_arg_med_devtype(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+			       char *obuf, int obuf_len)
 {
 	long value;
 	char *s;
@@ -162,7 +182,7 @@ static int get_arg_med_devtype(struct cmd *cmd, char *arg, char *argvalue,
 
 	switch (cmd->tlvid) {
 	case (OUI_TIA_TR41 << 8):
-		value = get_med_devtype(cmd->ifname);
+		value = get_med_devtype(cmd->ifname, cmd->type);
 		break;
 	case (OUI_TIA_TR41 << 8) | LLDP_MED_CAPABILITIES:
 	case (OUI_TIA_TR41 << 8) | LLDP_MED_NETWORK_POLICY:
@@ -175,6 +195,7 @@ static int get_arg_med_devtype(struct cmd *cmd, char *arg, char *argvalue,
 	case (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MANUFACTURER:
 	case (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MODELNAME:
 	case (OUI_TIA_TR41 << 8) | LLDP_MED_INV_ASSETID:
+		return cmd_not_applicable;
 	case INVALID_TLVID:
 		return cmd_invalid;
 	default:
@@ -201,14 +222,14 @@ static int get_arg_med_devtype(struct cmd *cmd, char *arg, char *argvalue,
 		return cmd_failed;
 	}
 
-	sprintf(obuf, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
+	snprintf(obuf, obuf_len, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
 		(unsigned int)strlen(s), s);
 
 	return cmd_success;
 }
 
-static int set_arg_med_devtype(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+static int _set_arg_med_devtype(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len, bool test)
 {
 	long value;
 
@@ -252,49 +273,66 @@ static int set_arg_med_devtype(struct cmd *cmd, char *arg, char *argvalue,
 	else
 		return cmd_invalid;
 
-	set_med_devtype(cmd->ifname, value);
+	if (test)
+		return cmd_success;
+
+	set_med_devtype(cmd->ifname, cmd->type, value);
 
 	/* set up default enabletx values based on class type */
 	switch (value) {
 	case LLDP_MED_DEVTYPE_NOT_DEFINED:
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_RESERVED);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_CAPABILITIES);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_NETWORK_POLICY);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_LOCATION_ID);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_EXTENDED_PVMDI);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_HWREV);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_FWREV);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_SWREV);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_SERIAL);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MANUFACTURER);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MODELNAME);
-		tlv_disabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_ASSETID);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_RESERVED);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_CAPABILITIES);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_NETWORK_POLICY);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_LOCATION_ID);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_EXTENDED_PVMDI);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_HWREV);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_FWREV);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_SWREV);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_SERIAL);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MANUFACTURER);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MODELNAME);
+		tlv_disabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_ASSETID);
 		break;
 
 	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_III:
 	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_II:
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_NETWORK_POLICY);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_NETWORK_POLICY);
 	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_I:
 	case LLDP_MED_DEVTYPE_NETWORK_CONNECTIVITY:
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_RESERVED);
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_CAPABILITIES);
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_HWREV);
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_FWREV);
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_SWREV);
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_SERIAL);
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MANUFACTURER);
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MODELNAME);
-		tlv_enabletx(cmd->ifname, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_ASSETID);
-		tlv_enabletx(cmd->ifname, SYSTEM_CAPABILITIES_TLV);
-		tlv_enabletx(cmd->ifname, (LLDP_MOD_8023 << 8) | LLDP_8023_MACPHY_CONFIG_STATUS);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_RESERVED);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_CAPABILITIES);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_HWREV);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_FWREV);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_SWREV);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_SERIAL);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MANUFACTURER);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_MODELNAME);
+		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_INV_ASSETID);
+		tlv_enabletx(cmd->ifname, cmd->type, SYSTEM_CAPABILITIES_TLV);
+		tlv_enabletx(cmd->ifname, cmd->type, (LLDP_MOD_8023 << 8) | LLDP_8023_MACPHY_CONFIG_STATUS);
 		break;
 	default:
 		return cmd_failed;
 	}
 
-	somethingChangedLocal(cmd->ifname);
+	snprintf(obuf, obuf_len, "devtype = %li\n", value);
+
+	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
+}
+
+static int set_arg_med_devtype(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_med_devtype(cmd, arg, argvalue, obuf, obuf_len, false);
+}
+
+static int test_arg_med_devtype(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_med_devtype(cmd, arg, argvalue, obuf, obuf_len, true);
 }
 
 struct arg_handlers *med_get_arg_handlers()

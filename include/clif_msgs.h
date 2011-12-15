@@ -20,16 +20,19 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef _CLIF_MSGS_H
 #define _CLIF_MSGS_H
 
-#include "dcb_types.h"
-#include "lldpad.h"
+#include <asm/types.h>
+#include "clif_sock.h"
+
+#ifndef IFNAMSIZ
+#define IFNAMSIZ	16
+#endif
 
 /* Client interface versions */
 /* Version 2
@@ -38,8 +41,11 @@
  *   Priority Flow Control feature adds 'number of TC's supported'
 */
 #define CLIF_EV_VERSION 2
-#define CLIF_MSG_VERSION 2
+#define CLIF_MSG_VERSION 3
 #define CLIF_RSP_VERSION CLIF_MSG_VERSION
+
+/* Minimum DCB CLIF MSG version we can resolve */
+#define CLIF_DCBMSG_VERSION 2
 
 /* Client interface global command codes */
 #define UNKNOWN_CMD  '.'
@@ -91,24 +97,38 @@
 #define MAX_CLIF_MSGBUF 4096
 
 struct cmd {
-	u8 cmd;
-	u32 module_id;
-	u32 ops;
-	u32 tlvid;
+	__u8 cmd;
+	__u32 module_id;
+	__u32 ops;
+	__u32 tlvid;
+	__u8 type;
 	char ifname[IFNAMSIZ+1];
 	char obuf[MAX_CLIF_MSGBUF];
 };
+
+enum {
+	MSG_MSGDUMP,
+	MSG_DEBUG,
+	MSG_INFO,
+	MSG_WARNING,
+	MSG_ERROR,
+	MSG_EVENT
+};
+
+#define MSG_DCB MSG_EVENT
 
 typedef enum {
     cmd_success = 0,
     cmd_failed,
     cmd_device_not_found,
+    cmd_agent_not_found,
     cmd_invalid,
     cmd_bad_params,
     cmd_peer_not_present,
     cmd_ctrl_vers_not_compatible,
     cmd_not_capable,
     cmd_not_applicable,
+    cmd_no_access,
 } cmd_status;
 
 #define SHOW_NO_OUTPUT 0x00
@@ -119,18 +139,22 @@ typedef enum {
 #define INVALID_TLVID 127
 
 struct type_name_info {
-	u32 type;
+	__u32 type;
 	char *name;   /* printable name */
 	char *key;    /* key word */
-	void (* print_info)(u16, char *);
-	void (* get_info)(u16, char *);
+	void (* print_info)(__u16, char *);
+	void (* get_info)(__u16, char *);
 };
+
+#define LLDP_ARG 0x00
+#define TLV_ARG 0x01
 
 struct arg_handlers {
 	char *arg;
-	int (* handle_get)(struct cmd *, char *, char *, char *);
-	int (* handle_set)(struct cmd *, char *, char *, char *);
-	int (* handle_test)(struct cmd *, char *, char *, char *);
+	int arg_class;
+	int (*handle_get)(struct cmd *, char *, char *, char *, int);
+	int (*handle_set)(struct cmd *, char *, char *, char *, int);
+	int (*handle_test)(struct cmd *, char *, char *, char *, int);
 };
 
 #endif

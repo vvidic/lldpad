@@ -20,24 +20,54 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <assert.h>
 #include "lldp_dcbx_cfg.h"
 #include "dcb_protocol.h"
 #include "messages.h"
 #include "lldpad.h"
 #include "config.h"
 #include "libconfig.h"
-#include "config.h"
+#include "lldp_util.h"
+#include "dcb_driver_interface.h"
 
 #define CFG_VERSION "1.0"
 
-
 extern config_t lldpad_cfg;
 
+static void
+config_setting_add_app_default(config_setting_t *eth_setting, int subtype)
+{
+	config_setting_t *tmp_setting = NULL;
+	config_setting_t *tmp2_setting = NULL;
+	char abuf[32];
+
+	sprintf(abuf, "app_%d", subtype);
+
+	tmp_setting = config_setting_add(eth_setting, abuf,
+		CONFIG_TYPE_GROUP);
+
+	tmp2_setting = config_setting_add(tmp_setting, "app_enable",
+		CONFIG_TYPE_INT);
+	config_setting_set_int(tmp2_setting, 0);
+	tmp2_setting = config_setting_add(tmp_setting, "app_advertise",
+		CONFIG_TYPE_INT);
+	config_setting_set_int(tmp2_setting, 0);
+	tmp2_setting = config_setting_add(tmp_setting, "app_willing",
+		CONFIG_TYPE_INT);
+	config_setting_set_int(tmp2_setting, 0);
+
+	tmp2_setting = config_setting_add(tmp_setting, "app_cfg",
+		CONFIG_TYPE_STRING);
+	config_setting_set_string(tmp2_setting, "03");
+	return;
+}
 
 static config_setting_t *construct_new_setting(char *device_name)
 {
@@ -132,28 +162,10 @@ static config_setting_t *construct_new_setting(char *device_name)
 	for (i = 0; i < MAX_BANDWIDTH_GROUPS; i++)
 		config_setting_set_string_elem(tmp_setting, -1, "");
 
-	for (i = 0; i < DCB_MAX_APPTLV; i++) {
-		sprintf(abuf, "app_%d", i);
-
-		tmp_setting = config_setting_add(eth_setting, abuf,
-			CONFIG_TYPE_GROUP);
-
-		tmp2_setting = config_setting_add(tmp_setting, "app_enable",
-			CONFIG_TYPE_INT);
-		config_setting_set_int(tmp2_setting, 0);
-		tmp2_setting = config_setting_add(tmp_setting, "app_advertise",
-			CONFIG_TYPE_INT);
-		config_setting_set_int(tmp2_setting, 0);
-		tmp2_setting = config_setting_add(tmp_setting, "app_willing",
-			CONFIG_TYPE_INT);
-		config_setting_set_int(tmp2_setting, 0);
-
-		tmp2_setting = config_setting_add(tmp_setting, "app_cfg",
-			CONFIG_TYPE_STRING);
-		config_setting_set_string(tmp2_setting, "");
-	}
-
-	for (i = 0; i < DCB_MAX_APPTLV; i++) {
+	for (i = 0; i < DCB_MAX_APPTLV; i++)
+		config_setting_add_app_default(eth_setting, i);
+	
+	for (i = 0; i < DCB_MAX_LLKTLV; i++) {
 		sprintf(abuf, "llink_%d", i);
 
 		tmp_setting = config_setting_add(eth_setting, abuf,
@@ -174,34 +186,11 @@ static config_setting_t *construct_new_setting(char *device_name)
 	return eth_setting;
 }
 
-/* assumes cfg_init() has already been called.
- * If old file format is present, remove old file and create a new one.
- * returns: 0 if everything is ok
- *          1 if a failure occurs
- */
-static int check_for_old_file_format()
-{
-	char *p;
-
-	if (config_lookup_string(&lldpad_cfg, "version", (const char **)&p)) {
-		destroy_cfg();
-		if (remove(cfg_file_name))
-			return dcb_failed;
-		check_cfg_file();
-		if (!init_cfg())
-			return dcb_failed;
-	}
-	return dcb_success;
-}
-
 void dcbx_default_cfg_file(void)
 {
 	config_setting_t *root_setting = NULL;
 	config_setting_t *dcbx_setting = NULL;
 	config_setting_t *tmp_setting = NULL;
-
-	if (!init_cfg())
-		return;
 
 	/* add the legacy default dcbx configuration settings */
         root_setting = config_root_setting(&lldpad_cfg);
@@ -217,17 +206,43 @@ void dcbx_default_cfg_file(void)
 	config_setting_set_string(tmp_setting, CFG_VERSION);
 	tmp_setting = config_setting_add(dcbx_setting, "dcbx_version",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp_setting, DEFAULT_DCBX_VERSION);
+	config_setting_set_int(tmp_setting, dcbx_subtype2);
 
 	config_write_file(&lldpad_cfg, cfg_file_name);
 }
 
-
-static dcb_result _set_persistent(char *device_name, int dcb_enable,
-		pg_attribs *pg, pfc_attribs *pfc, pg_info *bwg,
-		app_attribs *app, u8 app_subtype, llink_attribs *llink)
+void cfg_fixup(config_setting_t *eth_settings)
 {
-	char buf[128];
+	config_setting_t *setting = NULL;
+	char abuf[2*DCB_MAX_TLV_LENGTH + 1];
+	int i;
+
+	setting = config_setting_get_member(eth_settings, "app_0");
+	/*
+	 *  If there's no APP 0 entry then there's no need to create any others
+	 */
+	if (!setting)
+		return;
+
+	for (i = 1; i < DCB_MAX_APPTLV; i++) {
+		sprintf(abuf, "app_%d", i);
+		setting = config_setting_get_member(eth_settings, abuf);
+		/*
+		 *  Entry exists, go to the next one
+		 */
+		if (setting)
+			continue;
+		config_setting_add_app_default(eth_settings, i);
+	}
+
+	return;
+}
+
+static int _set_persistent(char *device_name, int dcb_enable,
+		pg_attribs *pg, pfc_attribs *pfc, pg_info *bwg,
+		app_attribs *app, u8 app_subtype,
+		llink_attribs *llink, u8 link_subtype)
+{
 	full_dcb_attribs attribs;
 	config_setting_t *dcbx_setting = NULL;
 	config_setting_t *eth_settings = NULL;
@@ -235,40 +250,7 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 	config_setting_t *setting_traffic = NULL;
 	config_setting_t *setting_value = NULL;
 	char abuf[2*DCB_MAX_TLV_LENGTH + 1];
-	char *p;
 	int result, i;
-
-	if (!init_cfg())
-		goto set_error;
-
-	/* check if config file is in the old format */
-
-	if (check_for_old_file_format()) {
-		goto set_error;
-	} else if (config_lookup_string(&lldpad_cfg, DCBX_SETTING "." "version",
-				(const char **)&p)) {
-		/* Read config file version - check for mismatch */
-		result = strcmp(p, CFG_VERSION);
-		if (result) {
-			if (result < 0) {
-				/* Create a new upgrade cfg file */
-				destroy_cfg();
-				if (remove(cfg_file_name))
-					return dcb_failed;
-				check_cfg_file();
-			}
-			else { /* Create a new downgrade cfg file*/
-				destroy_cfg();
-				if (remove(cfg_file_name))
-					return dcb_failed;
-				check_cfg_file();
-			}
-			if (!init_cfg())
-				goto set_error;
-		}
-	}
-	else
-		return dcb_failed;
 
 	dcbx_setting = config_lookup(&lldpad_cfg, DCBX_SETTING);
 	eth_settings = config_setting_get_member(dcbx_setting, device_name);
@@ -286,8 +268,8 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 			pfc = &attribs.pfc;
 		}
 		if (result == dcb_success && app == NULL) {
-			result = get_app(device_name,0,&attribs.app[0]);
-			app = &attribs.app[0];
+			result = get_app(device_name,app_subtype,&attribs.app[app_subtype]);
+			app = &attribs.app[app_subtype];
 		}
 		if (result == dcb_success && llink == NULL) {
 			result = get_llink(device_name,0,&attribs.llink[0]);
@@ -300,7 +282,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 		if (!eth_settings)
 			goto set_error;
 	}
-	TRACE2("read settings successfully:", device_name)
 
 	setting = config_setting_get_member(eth_settings, "dcb_enable");
 	if (!setting || !config_setting_set_int(setting, dcb_enable))
@@ -327,7 +308,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 		setting = config_setting_get_member(eth_settings,
 			"pfc_admin_mode");
 		if (!setting) {
-			TRACE("Read pfc_admin_mode is failed.")
 			goto set_error;
 		} else {
 			for (i = 0; i < config_setting_length(setting); i++) {
@@ -338,8 +318,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 					pfc->admin[i])) {
 					goto set_error;
 				}
-				TRACE1("PFC element # : ", i)
-				TRACE1("the value is : ",pfc->admin[i])
 			}
 		}
 	}
@@ -365,7 +343,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 		setting = config_setting_get_member(eth_settings,
 			"pg_tx_bwg_alloc");
 		if (!setting) {
-			TRACE("Read pg_tx_bwg_alloc failed.")
 			goto set_error;
 		} else {
 			for (i = 0; i<config_setting_length(setting); i++) {
@@ -374,16 +351,12 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 					pg->tx.pg_percent[i]))
 					goto set_error;
-				TRACE1("Bandwidth Group  # ", i)
-				TRACE1("TX Percentage is : ",
-					pg->tx.pg_percent[i])
 			}
 		}
 
 		setting_traffic = config_setting_get_member(eth_settings,
 			"pg_tx_traffic_attribs_type");
 		if (!setting_traffic) {
-			TRACE("Read pg_tx_traffic_attribs_type is failed.")
 			goto set_error;
 		} else {
 			setting = config_setting_get_member(setting_traffic,
@@ -396,9 +369,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 					pg->tx.up[i].tcmap))
 					goto set_error;
-				TRACE1("User Priority # :", i)
-				TRACE1("TX Traffic Class Mapping value is ",
-					pg->tx.up[i].tcmap)
 			}
 
 			setting = config_setting_get_member(setting_traffic,
@@ -411,9 +381,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 					pg->tx.up[i].pgid))
 					goto set_error;
-				TRACE1("User Priority #:", i)
-				TRACE1("TX Bandwidth Group Mapping value is ",
-					pg->tx.up[i].pgid)
 			}
 
 			setting = config_setting_get_member(setting_traffic,
@@ -424,9 +391,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 				   pg->tx.up[i].percent_of_pg_cap))
 					goto set_error;
-				TRACE1("User Priority #:", i)
-				TRACE1("TX Percent of BW Group value is  ",
-				    pg->tx.up[i].percent_of_pg_cap)
 			}
 
 			setting = config_setting_get_member(setting_traffic,
@@ -439,9 +403,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 					pg->tx.up[i].strict_priority))
 					goto set_error;
-				TRACE1("User Priority #:", i)
-				TRACE1("TX Strict Priority value is ",
-					pg->tx.up[i].strict_priority)
 			}
 		}
 
@@ -449,7 +410,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 		setting = config_setting_get_member(eth_settings,
 			"pg_rx_bwg_alloc");
 		if (!setting) {
-			TRACE("Read pg_rx_bwg_alloc failed.")
 			goto set_error;
 		} else {
 			for (i = 0; i < config_setting_length(setting); i++) {
@@ -458,16 +418,12 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 					pg->rx.pg_percent[i]))
 					goto set_error;
-				TRACE1("RX Bandwidth Group  # ", i)
-				TRACE1("Percentage is : ",
-					pg->rx.pg_percent[i])
 			}
 		}
 
 		setting_traffic = config_setting_get_member(eth_settings,
 			"pg_rx_traffic_attribs_type");
 		if (!setting_traffic) {
-			TRACE("Read pg_rx_traffic_attribs_type is failed.")
 			goto set_error;
 		} else {
 			setting = config_setting_get_member(setting_traffic,
@@ -480,9 +436,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 					pg->rx.up[i].tcmap))
 					goto set_error;
-				TRACE1("User Priority # :", i)
-				TRACE1("RX Traffic Class Mapping value is ",
-					pg->rx.up[i].tcmap)
 			}
 
 			setting = config_setting_get_member(setting_traffic,
@@ -495,9 +448,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 					pg->rx.up[i].pgid))
 					goto set_error;
-				TRACE1("User Priority #:", i)
-				TRACE1("RX Bandwidth Group Mapping value is ",
-					pg->rx.up[i].pgid)
 			}
 
 			setting = config_setting_get_member(setting_traffic,
@@ -510,9 +460,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 				   pg->rx.up[i].percent_of_pg_cap))
 					goto set_error;
-				TRACE1("User Priority #:", i)
-				TRACE1("RX Percent of BW Group value is  ",
-				    pg->rx.up[i].percent_of_pg_cap)
 			}
 
 			setting = config_setting_get_member(setting_traffic,
@@ -525,9 +472,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_int_elem(setting, i,
 					pg->rx.up[i].strict_priority))
 					goto set_error;
-				TRACE1("User Priority #:", i)
-				TRACE1("RX Strict Priority value is ",
-					pg->rx.up[i].strict_priority)
 			}
 		}
 	}
@@ -544,9 +488,6 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_set_string_elem(setting, i,
 					bwg->pgid_desc[i]))
 					goto set_error;
-				TRACE1("User Priority #", i)
-				TRACE2("Bandwidth Group Name is ",
-					bwg->pgid_desc[i])
 			}
 		}
 	}
@@ -557,9 +498,18 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 
 		setting = config_setting_get_member(eth_settings, abuf);
 
-		if (!setting)
-			goto set_error;
-
+		if (!setting) {
+			/*
+			 *  If we have an old version of the config file there
+			 *    will only be a zero'th app entry, fixup the
+			 *    config file to have all the other app entries.
+			 */
+			cfg_fixup(eth_settings);
+			setting = config_setting_get_member(eth_settings, abuf);
+			if (!setting)
+				goto set_error;
+		}
+ 
 		setting_value = config_setting_get_member(setting,
 			"app_enable");
 
@@ -593,7 +543,7 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 
 	/* Update Logical link settings */
 	if (NULL != llink) {
-		sprintf(abuf, "llink_%d", app_subtype);
+		sprintf(abuf, "llink_%d", link_subtype);
 
 		setting = config_setting_get_member(eth_settings, abuf);
 
@@ -622,81 +572,72 @@ static dcb_result _set_persistent(char *device_name, int dcb_enable,
 
 
 	config_write_file(&lldpad_cfg, cfg_file_name);
-	TRACE("Done!\n");
 
-	return dcb_success;
+	return 0;
 
 set_error:
-	snprintf(buf, sizeof(buf), "update of config file failed %s",
-		cfg_file_name);
-	log_message(MSG_ERR_DCB_INVALID_CONFIG_FILE, "%s", buf);
+	LLDPAD_ERR("update of config file failed %s", cfg_file_name);
 	return dcb_failed;
 }
 
-static dcb_result get_default_persistent(full_dcb_attribs *attribs)
+static int get_default_persistent(const char *ifname, full_dcb_attribs *attribs)
 {
 	int i;
 
 	if (get_pg(DEF_CFG_STORE, &attribs->pg) != dcb_success)
-		return dcb_failed;
+		return 1;
 
 	if (get_pfc(DEF_CFG_STORE, &attribs->pfc) != dcb_success)
-		return dcb_failed;
+		return 1;
+
+	get_dcb_numtcs(ifname, &attribs->pg.num_tcs, &attribs->pfc.num_tcs);
 
 	for (i = 0; i < DCB_MAX_APPTLV; i++) {
 		if (get_app(DEF_CFG_STORE, i, &attribs->app[i]) != dcb_success)
-			return dcb_failed;
+			return 1;
 	}
 
-
-	for (i = 0; i < DCB_MAX_APPTLV; i++) {
+	for (i = 0; i < DCB_MAX_LLKTLV; i++) {
 		if (get_llink(DEF_CFG_STORE, i,
 			&attribs->llink[i]) != dcb_success)
-			return dcb_failed;
+			return 1;
 	}
 
-	return dcb_success;
+	return 0;
 }
 
-dcb_result save_dcb_enable_state(char *device_name, int dcb_enable)
+int save_dcb_enable_state(char *device_name, int dcb_enable)
 {
 	return _set_persistent(device_name, dcb_enable, NULL, NULL, NULL, NULL, 
-				0, NULL);
+				0, NULL, 0);
 }
 
-dcb_result save_dcbx_version(int dcbx_version)
+int save_dcbx_version(int dcbx_version)
 {
-	config_setting_t *dcbx_setting = NULL;
-	config_setting_t *setting = NULL;
-	int rval = dcb_success;
+	config_setting_t *dcbx_setting;
+	config_setting_t *setting;
 
-	if (!init_cfg())
-		return dcb_failed;
-
-	if (check_for_old_file_format())
-		return dcb_failed;
 	dcbx_setting = config_lookup(&lldpad_cfg, DCBX_SETTING);
 	if (!dcbx_setting)
-		return dcb_failed;
+		return 1;
 
 	setting = config_setting_get_member(dcbx_setting, "dcbx_version");
-
 	if (!setting || !config_setting_set_int(setting, dcbx_version) ||
 		!config_write_file(&lldpad_cfg, cfg_file_name))
-		rval = dcb_failed;
+		return 1;
 
-	return dcb_success;
+	return 0;
 }
 
-dcb_result set_persistent(char *device_name, full_dcb_attrib_ptrs *attribs)
+int set_persistent(char *device_name, full_dcb_attrib_ptrs *attribs)
 {
 	return _set_persistent(device_name, true, attribs->pg, attribs->pfc, 
 			attribs->pgid, attribs->app, attribs->app_subtype, 
-			attribs->llink);
+			attribs->llink, LLINK_FCOE_STYPE);
 }
 
 
-dcb_result get_persistent(char *device_name, full_dcb_attribs *attribs)
+int get_persistent(char *device_name, full_dcb_attribs *attribs)
 {
 	config_setting_t *dcbx_setting = NULL;
 	config_setting_t *eth_settings = NULL;
@@ -704,56 +645,24 @@ dcb_result get_persistent(char *device_name, full_dcb_attribs *attribs)
 	config_setting_t *setting_array = NULL;
 	config_setting_t *setting_traffic = NULL;
 	config_setting_t *setting_value = NULL;
+	full_dcb_attrib_ptrs attrib_ptrs;
 	int result = dcb_failed, i;
 	int results[MAX_USER_PRIORITIES];
-	char *p;
 	int len;
 	char abuf[32];
 
 	memset(attribs, 0, sizeof(*attribs));
-
-	/* Read dcbx config setting version */
-	if (check_for_old_file_format())
-		return dcb_failed;
-
-	if (config_lookup_string(&lldpad_cfg, DCBX_SETTING "." "version",
-				(const char **)&p)) {
-		result = strcmp(p, CFG_VERSION);
-		if (result) {
-			if (result < 0) {
-				/* Create a new upgrade cfg file */
-				destroy_cfg();
-				if (remove(cfg_file_name))
-					return dcb_failed;
-				check_cfg_file();
-			}
-			else { /* Create a new downgrade cfg file*/
-				destroy_cfg();
-				if (remove(cfg_file_name))
-					return dcb_failed;
-				check_cfg_file();
-			}
-			init_cfg();
-		}
-	}
-	else {
-		return dcb_failed;
-	}
-
 	dcbx_setting = config_lookup(&lldpad_cfg, DCBX_SETTING);
 	eth_settings = config_setting_get_member(dcbx_setting, device_name);
 
 	/* init the internal data store for device_name */
+	result = get_default_persistent(device_name, attribs);
 	if (NULL == eth_settings) {
-		TRACE2("failed to read settings:", device_name)
-
 		assert(memcmp(device_name, DEF_CFG_STORE, 
 			strlen(DEF_CFG_STORE)));
 
-		result = get_default_persistent(attribs);
 		return result;
 	}
-	TRACE2("read settings successfully:", device_name)
 
 	/* Read pfc setting */
 	if (get_int_config(eth_settings, "pfc_enable", TYPE_BOOL,
@@ -904,9 +813,7 @@ dcb_result get_persistent(char *device_name, full_dcb_attribs *attribs)
 	}
 
 	setting = config_setting_get_member(eth_settings, "bwg_description");
-	if (!setting) {
-		TRACE("Read bwg_description is failed.\n")
-	} else {
+	if (setting) {
 		for (i = 0; i < config_setting_length(setting); i++) {
 			setting_array = config_setting_get_elem(setting, i);
 			const char *bwg_descp =
@@ -914,23 +821,29 @@ dcb_result get_persistent(char *device_name, full_dcb_attribs *attribs)
 			if (bwg_descp)
 				strncpy(attribs->descript.pgid_desc[i],
 					bwg_descp, MAX_DESCRIPTION_LEN-1);
-			TRACE1("User Priority #", i)
-			TRACE2("Bandwidth Group Name is ",
-				attribs->descript.pgid_desc[i])
 		}
 
 		/*The counter starts from 1, not 0 */
 		attribs->descript.max_pgid_desc = i;
-		TRACE1("TX valid_bwg_count is : ",
-			attribs->descript.max_pgid_desc)
 	}
 
 	for (i = 0; i < DCB_MAX_APPTLV; i++) {
 		sprintf(abuf, "app_%d", i);
 
 		setting = config_setting_get_member(eth_settings, abuf);
-		if (!setting)
-			continue;
+
+		if (!setting) {
+			/*
+			 *  If we have an old config file there will be the
+			 *    zero'th entry so use it as the EWA template for
+			 *    all other application types.  Other data values
+			 *    we be the default value.
+			 */
+			attribs->app[i].protocol.Enable = attribs->app[0].protocol.Enable;
+			attribs->app[i].protocol.Willing = attribs->app[0].protocol.Willing;
+			attribs->app[i].protocol.Advertise = attribs->app[0].protocol.Advertise;
+ 			continue;
+		}
 
 		/* Read app setting */
 		if (get_int_config(setting, "app_enable", TYPE_BOOL,
@@ -957,22 +870,20 @@ dcb_result get_persistent(char *device_name, full_dcb_attribs *attribs)
 				config_setting_get_string(setting_value);
 			len = strlen(app_cfg_hex);
 			if (len % 2 || len > DCB_MAX_TLV_LENGTH) {
-				log_message(MSG_ERR_DCB_INVALID_CONFIG_FILE,
-					"%s", "invalid length for app_cfg");
+				LLDPAD_DBG("invalid length for app_cfg");
 				goto set_default;
 			}
 
 			if (hexstr2bin(app_cfg_hex, attribs->app[i].AppData,
 				len/2)) {
-				log_message(MSG_ERR_DCB_INVALID_CONFIG_FILE,
-					"%s", "invalid value for app_cfg");
+				LLDPAD_DBG("invalid value for app_cfg");
 				goto set_default;
 			}
 			attribs->app[i].Length = len/2;
 		}
 	}
 
-	for (i = 0; i < DCB_MAX_APPTLV; i++) {
+	for (i = 0; i < DCB_MAX_LLKTLV; i++) {
 		sprintf(abuf, "llink_%d", i);
 
 		setting = config_setting_get_member(eth_settings, abuf);
@@ -999,12 +910,17 @@ dcb_result get_persistent(char *device_name, full_dcb_attribs *attribs)
 			goto set_default;
 	}
 
-
-	return dcb_success;
+	return 0;
 
 set_default:
-	fprintf(stderr, "Error read config file.\n");
-	result = get_default_persistent(attribs);
+	LLDPAD_WARN("Error read config file.\n");
+	result = get_default_persistent(device_name, attribs);
+
+	if (!result) {
+		attrib_ptrs.pg = &attribs->pg;
+		result = dcb_check_config(&attrib_ptrs);
+	}
+
 	return result;
 }
 
@@ -1025,11 +941,11 @@ int get_dcb_enable_state(char *ifname, int *result)
 	snprintf(path, sizeof(path), "%s.%s.dcb_enable", DCBX_SETTING, ifname);
 	settings = config_lookup(&lldpad_cfg, path);
 	if (!settings) {
-		printf("### %s:%s:failed on %s\n", __func__, ifname, path);
+		LLDPAD_INFO("### %s:%s:failed on %s\n", __func__, ifname, path);
 		snprintf(path, sizeof(path), "%s.dcb_enable", ifname);
 		settings = config_lookup(&lldpad_cfg, path);
 		if (!settings) {
-			printf("### %s:%s:failed again %s\n", __func__, ifname, path);
+			LLDPAD_INFO("### %s:%s:failed again %s\n", __func__, ifname, path);
 			rc = EIO;
 			goto out_err;
 		}
@@ -1045,17 +961,9 @@ int get_dcbx_version(int *result)
 	config_setting_t *dcbx_setting = NULL;
 	int rval = 0;
 
-	if (!init_cfg())
-		return rval;
-
-	if (check_for_old_file_format())
-		return rval;
-
 	dcbx_setting = config_lookup(&lldpad_cfg, DCBX_SETTING);
 	if (!dcbx_setting) {
 		create_default_cfg_file();
-		if (!init_cfg())
-			return rval;
 		dcbx_setting = config_lookup(&lldpad_cfg, DCBX_SETTING);
 	}
 
@@ -1063,6 +971,8 @@ int get_dcbx_version(int *result)
 		switch (*result) {
 		case dcbx_subtype1:
 		case dcbx_subtype2:
+		case dcbx_force_subtype1:
+		case dcbx_force_subtype2:
 			rval = 1;
 			break;
 		default:

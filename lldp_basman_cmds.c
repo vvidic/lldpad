@@ -20,13 +20,10 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "includes.h"
-#include "common.h"
 #include <stdio.h>
 #include <syslog.h>
 #include <sys/un.h>
@@ -44,22 +41,29 @@
 #include "clif_msgs.h"
 #include "lldp/states.h"
 
-static int get_arg_ipv4(struct cmd *, char *, char *, char *);
-static int set_arg_ipv4(struct cmd *, char *, char *, char *);
-static int get_arg_ipv6(struct cmd *, char *, char *, char *);
-static int set_arg_ipv6(struct cmd *, char *, char *, char *);
-static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *);
-static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *);
+static int get_arg_ipv4(struct cmd *, char *, char *, char *, int);
+static int set_arg_ipv4(struct cmd *, char *, char *, char *, int);
+static int test_arg_ipv4(struct cmd *, char *, char *, char *, int);
+static int get_arg_ipv6(struct cmd *, char *, char *, char *, int);
+static int set_arg_ipv6(struct cmd *, char *, char *, char *, int);
+static int test_arg_ipv6(struct cmd *, char *, char *, char *, int);
+static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int test_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
 
 static struct arg_handlers arg_handlers[] = {
-	{ ARG_IPV4_ADDR,   get_arg_ipv4,        set_arg_ipv4 },
-	{ ARG_IPV6_ADDR,   get_arg_ipv6,        set_arg_ipv6 },
-	{ ARG_TLVTXENABLE, get_arg_tlvtxenable, set_arg_tlvtxenable },
+	{ ARG_IPV4_ADDR, TLV_ARG,
+		get_arg_ipv4, set_arg_ipv4, test_arg_ipv4 },
+	{ ARG_IPV6_ADDR, TLV_ARG,
+		get_arg_ipv6, set_arg_ipv6, test_arg_ipv6 },
+	{ ARG_TLVTXENABLE, TLV_ARG,
+		get_arg_tlvtxenable, set_arg_tlvtxenable,
+		test_arg_tlvtxenable },
 	{ NULL }
 };
 
 static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+			       char *obuf, int obuf_len)
 {
 	int value;
 	char *s;
@@ -76,9 +80,9 @@ static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 	case MANAGEMENT_ADDRESS_TLV:
 		snprintf(arg_path, sizeof(arg_path), "%s%08x.%s",
 			 TLVID_PREFIX, cmd->tlvid, arg);
-		
-		if (get_config_setting(cmd->ifname, arg_path, (void *)&value,
-					CONFIG_TYPE_BOOL))
+
+		if (get_config_setting(cmd->ifname, cmd->type, arg_path,
+				       &value, CONFIG_TYPE_BOOL))
 			value = false;
 		break;
 	case INVALID_TLVID:
@@ -91,15 +95,14 @@ static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 		s = VAL_YES;
 	else
 		s = VAL_NO;
-	
-	sprintf(obuf, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
-		(unsigned int)strlen(s), s);
+	snprintf(obuf, obuf_len, "%02x%s%04x%s",
+		 (unsigned int)strlen(arg), arg, (unsigned int)strlen(s), s);
 
 	return cmd_success;
 }
 
-static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+static int _set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len, bool test)
 {
 	int value;
 	char arg_path[256];
@@ -127,15 +130,33 @@ static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 	else
 		return cmd_invalid;
 
+	if (test)
+		return cmd_success;
+
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
 		 cmd->tlvid, arg);
 
-	if (set_cfg(cmd->ifname, arg_path, (void *)&value, CONFIG_TYPE_BOOL))
+	if (set_cfg(cmd->ifname, cmd->type, arg_path, &value,
+		    CONFIG_TYPE_BOOL))
 		return cmd_failed;
 
-	somethingChangedLocal(cmd->ifname);
+	sprintf(obuf + strlen(obuf), "enableTx = %s\n", value ? "yes" : "no");
+
+	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
+}
+
+static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_tlvtxenable(cmd, arg, argvalue, obuf, obuf_len, false);
+}
+
+static int test_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_tlvtxenable(cmd, arg, argvalue, obuf, obuf_len, true);
 }
 
 struct arg_handlers *basman_get_arg_handlers()
@@ -143,93 +164,136 @@ struct arg_handlers *basman_get_arg_handlers()
 	return &arg_handlers[0];
 }
 
-int get_arg_ipv4(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+int get_arg_ipv4(struct cmd *cmd, char *arg, char *argvalue,
+		 char *obuf, int obuf_len)
 {
-	char *p;
+	const char *p = NULL;
 	char arg_path[256];
 
-	if (cmd->cmd != cmd_gettlv || cmd->tlvid != MANAGEMENT_ADDRESS_TLV)
+	if (cmd->cmd != cmd_gettlv)
 		return cmd_bad_params;
+
+	if (cmd->tlvid != MANAGEMENT_ADDRESS_TLV)
+		return cmd_not_applicable;
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s",
 		 TLVID_PREFIX, cmd->tlvid, arg);
 
-	if (get_config_setting(cmd->ifname, arg_path, (void *)&p,
+	if (get_config_setting(cmd->ifname, cmd->type, arg_path, &p,
 				CONFIG_TYPE_STRING))
 		return cmd_failed;
 
-	sprintf(obuf, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
-		(unsigned int)strlen(p), p);
+	snprintf(obuf, obuf_len, "%02zx%s%04zx%s",
+		 strlen(arg), arg, strlen(p), p);
 	return cmd_success;
 }
 
-int get_arg_ipv6(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+int get_arg_ipv6(struct cmd *cmd, char *arg, char *argvalue,
+		 char *obuf, int obuf_len)
 {
-	char *p;
+	const char *p = NULL;
 	char arg_path[256];
 
-	if (cmd->cmd != cmd_gettlv || cmd->tlvid != MANAGEMENT_ADDRESS_TLV)
+	if (cmd->cmd != cmd_gettlv)
 		return cmd_bad_params;
+
+	if (cmd->tlvid != MANAGEMENT_ADDRESS_TLV)
+		return cmd_not_applicable;
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s",
 		 TLVID_PREFIX, cmd->tlvid, arg);
-		
-	if (get_config_setting(cmd->ifname, arg_path, (void *)&p,
+
+	if (get_config_setting(cmd->ifname, cmd->type, arg_path, &p,
 					CONFIG_TYPE_STRING))
 		return cmd_failed;
 
-	sprintf(obuf, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
-		(unsigned int)strlen(p), p);
+	snprintf(obuf, obuf_len, "%02zx%s%04zx%s",
+		 strlen(arg), arg, strlen(p), p);
 
 	return cmd_success;
 }
 
-int set_arg_ipv4(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+int _set_arg_ipv4(struct cmd *cmd, char *arg, char *argvalue,
+		  char *obuf, int obuf_len, bool test)
 {
 	struct in_addr ipv4addr;
 	char arg_path[256];
-	char *p;
+	const char *p;
 
 	if (cmd->cmd != cmd_settlv || cmd->tlvid != MANAGEMENT_ADDRESS_TLV)
 		return cmd_bad_params;
 
-	if (!inet_pton(AF_INET, argvalue, (void *)&ipv4addr))
+	if (!inet_pton(AF_INET, argvalue, &ipv4addr))
 		return cmd_bad_params;
+
+	if (test)
+		return cmd_success;
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
 		 cmd->tlvid, arg);
 
 	p = &argvalue[0];
-	if (set_config_setting(cmd->ifname, arg_path, (void *)&p,
+	if (set_config_setting(cmd->ifname, cmd->type, arg_path, &p,
 		    CONFIG_TYPE_STRING))
 		return cmd_failed;
 
-	somethingChangedLocal(cmd->ifname);
+	sprintf(obuf + strlen(obuf), "ipv4 = %s", argvalue);
+
+	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
 }
 
-int set_arg_ipv6(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+int set_arg_ipv4(struct cmd *cmd, char *arg, char *argvalue,
+		 char *obuf, int obuf_len)
+{
+	return _set_arg_ipv4(cmd, arg, argvalue, obuf, obuf_len, false);
+}
+
+int test_arg_ipv4(struct cmd *cmd, char *arg, char *argvalue,
+		  char *obuf, int obuf_len)
+{
+	return _set_arg_ipv4(cmd, arg, argvalue, obuf, obuf_len, true);
+}
+
+int _set_arg_ipv6(struct cmd *cmd, char *arg, char *argvalue,
+		  char *obuf, int obuf_len, bool test)
 {
 	struct in6_addr ipv6addr;
 	char arg_path[256];
-	char *p;
+	const char *p;
 
 	if (cmd->cmd != cmd_settlv || cmd->tlvid != MANAGEMENT_ADDRESS_TLV)
 		return cmd_bad_params;
 
-	if (!inet_pton(AF_INET6, argvalue, (void *)&ipv6addr))
+	if (!inet_pton(AF_INET6, argvalue, &ipv6addr))
 		return cmd_bad_params;
+
+	if (test)
+		return cmd_success;
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
 		 cmd->tlvid, arg);
 
 	p = &argvalue[0];
-	if (set_config_setting(cmd->ifname, arg_path, (void *)&p,
+	if (set_config_setting(cmd->ifname, cmd->type, arg_path, &p,
 		    CONFIG_TYPE_STRING))
 		return cmd_failed;
 
-	somethingChangedLocal(cmd->ifname);
+	sprintf(obuf + strlen(obuf), "ipv6 = %s", argvalue);
+	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
+}
+
+int set_arg_ipv6(struct cmd *cmd, char *arg, char *argvalue,
+		 char *obuf, int obuf_len)
+{
+	return _set_arg_ipv6(cmd, arg, argvalue, obuf, obuf_len, false);
+}
+
+int test_arg_ipv6(struct cmd *cmd, char *arg, char *argvalue,
+		  char *obuf, int obuf_len)
+{
+	return _set_arg_ipv6(cmd, arg, argvalue, obuf, obuf_len, false);
 }

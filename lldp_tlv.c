@@ -20,30 +20,32 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "dcb_osdep.h"
+#include <stdlib.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include "lldp_tlv.h"
 #include "lldp.h"
+#include "lldp/ports.h"
 #include "lldp/l2_packet.h"
 #include "dcb_types.h"
+#include "messages.h"
 
-void somethingChangedLocal(char *ifname)
+void somethingChangedLocal(const char *ifname, int type)
 {
-	struct port *port = porthead;
+	struct lldp_agent *agent;
 
-	while (port != NULL) {
-		if (!strncmp(ifname, port->ifname, MAX_DEVICE_NAME_LEN))
-			break;
-		port = port->next;
-	}
+	agent = lldp_agent_find_by_type(ifname, type);
 
-	if (!port)
+	if (agent == NULL)
 		return;
 
-	port->tx.localChange = 1;
+	agent->tx.localChange = 1;
+	agent->tx.txFast = agent->timers.txFastInit;
+
 	return;
 }
 
@@ -70,7 +72,7 @@ struct packed_tlv *pack_tlv(struct unpacked_tlv *tlv)
 
 	pkd_tlv = (struct packed_tlv *)malloc(sizeof(struct packed_tlv));
 	if(!pkd_tlv) {
-		printf("pack_tlv: Failed to malloc pkd_tlv\n");
+		LLDPAD_DBG("pack_tlv: Failed to malloc pkd_tlv\n");
 		return NULL;
 	}
 	memset(pkd_tlv,0,sizeof(struct packed_tlv));
@@ -83,7 +85,7 @@ struct packed_tlv *pack_tlv(struct unpacked_tlv *tlv)
 			memcpy(&pkd_tlv->tlv[sizeof(tl)], tlv->info,
 				tlv->length);
 	} else {
-		printf("pack_tlv: Failed to malloc tlv\n");
+		LLDPAD_DBG("pack_tlv: Failed to malloc tlv\n");
 		free(pkd_tlv);
 		pkd_tlv = NULL;
 		return NULL;
@@ -145,12 +147,12 @@ struct unpacked_tlv *unpack_tlv(struct packed_tlv *tlv)
 			memcpy(upkd_tlv->info, &tlv->tlv[sizeof(tl)],
 				upkd_tlv->length);
 		} else {
-			printf("unpack_tlv: Failed to malloc info\n");
+			LLDPAD_DBG("unpack_tlv: Failed to malloc info\n");
 			free (upkd_tlv);
 			return NULL;
 		}
 	} else {
-		printf("unpack_tlv: Failed to malloc upkd_tlv\n");
+		LLDPAD_DBG("unpack_tlv: Failed to malloc upkd_tlv\n");
 		return NULL;
 	}
 	return upkd_tlv;
@@ -201,7 +203,7 @@ struct unpacked_tlv *create_tlv()
 		memset(tlv,0, sizeof(struct unpacked_tlv));
 		return tlv;
 	} else {
-		printf("create_tlv: Failed to malloc tlv\n");
+		LLDPAD_DBG("create_tlv: Failed to malloc tlv\n");
 		return NULL;
 	}
 }

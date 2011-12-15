@@ -20,8 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
@@ -35,6 +34,6 @@ int mand_clif_cmd(void *data,
 		  struct sockaddr_un *from,
 		  socklen_t fromlen,
 		  char *ibuf, int ilen,
-		  char *rbuf);
+		  char *rbuf, int rlen);
 
 #endif

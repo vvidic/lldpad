@@ -68,6 +68,8 @@ Requirements
   Flex source can be obtained from http://flex.sourceforge.net/
 - An up to date netlink library needs to be installed in order to compile
   lldpad.
+- Version 1.3.2 or greater of libconfig must be installed.
+  libconfig source can be obtained from http://www.hyperrealm.com/libconfig/
 - For DCB features - a driver which supports the dcbnl rtnetlink interface
   in the kernel (e.g. the ixgbe driver for 82598-based or 82599-based Intel
   adapters).
@@ -157,10 +159,16 @@ lldpad Application Install
    will work.
 	
 2. Download the latest version of the lldpad-x.y.z tarball from the e1000
-   project in Sourceforge and untar it. Go into the lldpad-x.y.z directory
-   and run the following commands 
+   project in Sourceforge and untar it.
+
+   Check to see that the following libraries are installed; install them if
+   they are not present.
+
+	 libtool; libconfig-devel; libnl-devel
+
+   Go into the lldpad-x.y.z directory and run the following commands
    
-     ./configure --prefix=/usr; make; make install
+     ./bootstrap.sh; ./configure --prefix=/usr; make; make install
 
    This will build and install 'lldpad', 'lldptool' and 'dcbtool' to /usr/sbin,
    make the '/var/lib/lldpad' directory (default location of
@@ -215,7 +223,7 @@ DCBX Operation
 lldpad and dcbtool can be used to configure a DCB capable driver, such as
 the ixgbe driver, which supports the rtnetlink DCB interface.  Once the
 DCB features are configured, the next step is to classify traffic to be
-identified with an 802.1p priority and the associated DCB features.  
+identified with an 802.1p priority and the associated DCB features.
 This can be done using a couple different methods.
 
 1. qdisc and filter method
@@ -554,5 +562,5 @@ Support
 =======
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
+  LLDP-devel Mailing List <lldp-devel@open-lldp.org>
   Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497

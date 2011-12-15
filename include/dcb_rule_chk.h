@@ -20,15 +20,14 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef _DCB_RULE_CHK_H
 #define _DCB_RULE_CHK_H
 
-#include "dcb_types.h"
+#include "lldp.h"
 
 #define MAX_USER_PRIORITY       MAX_USER_PRIORITIES
 #define MAX_TRAFFIC_CLASS       MAX_TRAFFIC_CLASSES

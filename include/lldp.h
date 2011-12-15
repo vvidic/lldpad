@@ -20,15 +20,34 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef _LLDP_H
 #define _LLDP_H
 
-#include "lldp_tlv.h"
+#include <asm/types.h>
+#include <stdbool.h>
+
+typedef __u8 u8;
+typedef __u16 u16;
+typedef __u32 u32;
+typedef __u64 u64;
+
+#define MIN(x,y) \
+	({	\
+		typeof (x) __x = (x);	\
+		typeof (y) __y = (y);	\
+		__x < __y ? __x : __y;	\
+	 })
+
+#define MAX(x,y) \
+	({	\
+		typeof (x) __x = (x);	\
+		typeof (y) __y = (y);	\
+		__x > __y ? __x : __y;	\
+	 })
 
 /*
  * Organizationally Unique Identifier (OUI)
@@ -44,6 +63,10 @@
 #define OUI_IEEE_80211	0x000fac
 /* Telecommunications Industry Association TR-41 Committee */
 #define OUI_TIA_TR41	0x0012bb
+/* Ciso OUI */
+#define OUI_CISCO	0x000142
+
+#define OUI_IEEE_8021Qbg	0x001b3f
 
 /* IEEE 802.3AB Clause 9: TLV Types */
 #define CHASSIS_ID_TLV    1
@@ -78,6 +101,16 @@
 #define PORT_ID_AGENT_CIRCUIT_ID 6
 #define PORT_ID_LOCALLY_ASSIGNED 7
 #define PORT_ID_INVALID(t)	(((t) == 0) || ((t) > 7))
+
+/* IEEE 802.1AB: Annex E, Table E.1: Organizationally Specific TLVs */
+#define ORG_SPEC_PVID		1
+#define ORG_SPEC_PPVID		2
+#define ORG_SPEC_VLAN_NAME	3
+#define ORG_SPEC_PROTO_ID	4
+#define ORG_SPEC_VID_USAGE	5
+#define ORG_SPEC_MGMT_VID	6
+#define ORG_SPEC_LINK_AGGR	7
+#define ORG_SPEC_INVALID(t)	(((t) == 0) || ((t) > 7))
 
 /* IEEE 802.1AB: 8.5.8, Table 8-4: System Capabilities */
 #define SYSCAP_OTHER	(1 << 0)
@@ -173,6 +206,12 @@ enum {
 #define LLDP_MED_LOCID_ECS_ELIN		3
 #define LLDP_MED_LOCID_FORMAT_INVALID(t) (((t) == 0) || ((t) > 3))
 
+/* IEEE 802.1Qaz Organizationally Specific TLV Subtypes */
+#define LLDP_8021QAZ_ETSCFG	9
+#define LLDP_8021QAZ_ETSREC	10
+#define LLDP_8021QAZ_PFC	11
+#define LLDP_8021QAZ_APP	12
+
 /* IEEE 802.3 Organizationally Specific TLV Subtypes: 802.1AB-2005 Annex G */
 #define LLDP_8023_RESERVED		0
 #define LLDP_8023_MACPHY_CONFIG_STATUS	1
@@ -186,5 +225,23 @@ enum {
 #define LLDP_8023_LINKAGG_CAPABLE	(1 << 0)
 #define LLDP_8023_LINKAGG_ENABLED	(1 << 1)
 
-void somethingChangedLocal(char *ifname);
+/* IEEE 802.1Qbg subtype */
+#define LLDP_EVB_SUBTYPE		0
+#define LLDP_VDP_SUBTYPE		0x2
+
+/* forwarding mode */
+#define LLDP_EVB_CAPABILITY_FORWARD_STANDARD		(1 << 7)
+#define LLDP_EVB_CAPABILITY_FORWARD_REFLECTIVE_RELAY	(1 << 6)
+
+/* EVB supported protocols */
+#define LLDP_EVB_CAPABILITY_PROTOCOL_RTE		(1 << 2)
+#define LLDP_EVB_CAPABILITY_PROTOCOL_ECP		(1 << 1)
+#define LLDP_EVB_CAPABILITY_PROTOCOL_VDP		(1 << 0)
+
+/* EVB specific values */
+#define LLDP_EVB_DEFAULT_MAX_VSI			65535
+#define LLDP_EVB_DEFAULT_SVSI				3295
+#define LLDP_EVB_DEFAULT_RTE				15
+
+void somethingChangedLocal(const char *ifname, int type);
 #endif /* _LLDP_H */

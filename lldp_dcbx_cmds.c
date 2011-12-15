@@ -20,15 +20,14 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "common.h"
 #include <stdio.h>
 #include <syslog.h>
 #include <sys/stat.h>
+#include <stdlib.h>
 #include "lldp.h"
 #include "lldpad.h"
 #include "dcb_events.h"
@@ -39,10 +38,12 @@
 #include "dcb_protocol.h"
 #include "lldp/ports.h"
 #include "config.h"
-#include "drv_cfg.h"
+#include "lldp_dcbx_nl.h"
 #include "lldp/states.h"
 #include "lldp_dcbx.h"
 #include "lldp_rtnl.h"
+#include "messages.h"
+#include "lldp_util.h"
 
 extern u8 gdcbx_subtype;
 
@@ -72,20 +73,23 @@ static int get_llink_data(llink_attribs *llink_data, int cmd, char *port_id,
 static dcb_result get_bwg_desc(char *port_id, char *ibuf, int ilen, char *rbuf);
 static dcb_result set_bwg_desc(char *port_id, char *ibuf, int ilen);
 static void set_protocol_data(feature_protocol_attribs *protocol, char *ifname,
-		char *ibuf, int plen);
+		char *ibuf, int plen, int agenttype);
 static dcb_result get_cmd_protocol_data(feature_protocol_attribs *protocol,
 	u8 cmd, char *rbuf);
 
-static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *);
-static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *);
+static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int test_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
 
 static struct arg_handlers arg_handlers[] = {
-	{ ARG_TLVTXENABLE, get_arg_tlvtxenable, set_arg_tlvtxenable },
+	{ ARG_TLVTXENABLE, TLV_ARG,
+		get_arg_tlvtxenable, set_arg_tlvtxenable,
+		test_arg_tlvtxenable },
 	{ NULL }
 };
 
 static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+			       char *obuf, int obuf_len)
 {
 	int value;
 	char *s;
@@ -99,8 +103,8 @@ static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 	case (OUI_CEE_DCBX << 8) | 2:
 		snprintf(arg_path, sizeof(arg_path), "%s%08x.%s",
 			 TLVID_PREFIX, cmd->tlvid, arg);
-		
-		if (get_config_setting(cmd->ifname, arg_path, (void *)&value,
+
+		if (get_config_setting(cmd->ifname, cmd->type, arg_path, &value,
 					CONFIG_TYPE_BOOL))
 			value = false;
 		break;
@@ -115,54 +119,54 @@ static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 	else
 		s = VAL_NO;
 	
-	sprintf(obuf, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
-		(unsigned int)strlen(s), s);
+	snprintf(obuf, obuf_len, "%02zx%s%04zx%s", strlen(arg), arg,
+		 strlen(s), s);
 
 	return cmd_success;
 }
 
-void dont_advertise_dcbx_all(char *ifname)
+void dont_advertise_dcbx_all(char *ifname, bool ad)
 {
-	int i;
+	int i, is_pfc;
 	pfc_attribs pfc_data;
 	pg_attribs pg_data;
 	app_attribs app_data;
 	llink_attribs llink_data;
 	u32 event_flag = 0;
 
-	if (get_pg(ifname, &pg_data) == dcb_success &&
-	    pg_data.protocol.Advertise) {
-		pg_data.protocol.Advertise = 0;
-		put_pg(ifname, &pg_data);
+	is_pfc = get_pfc(ifname, &pfc_data);
+
+	if (get_pg(ifname, &pg_data) == dcb_success) {
+		pg_data.protocol.Advertise = ad;
+		put_pg(ifname, &pg_data, &pfc_data);
 		event_flag |= DCB_LOCAL_CHANGE_PG;
 	}
 
-	if (get_pfc(ifname, &pfc_data) == dcb_success &&
-	    pfc_data.protocol.Advertise) {
-		pfc_data.protocol.Advertise = 0;
+	if (is_pfc == dcb_success) {
+		pfc_data.protocol.Advertise = ad;
 		put_pfc(ifname, &pfc_data);
 		event_flag |= DCB_LOCAL_CHANGE_PFC;
 	}
 
 	for (i = 0; i < DCB_MAX_APPTLV ; i++) {
-		if (get_app(ifname, (u32)i, &app_data) == dcb_success &&
-		    app_data.protocol.Advertise) {
-			app_data.protocol.Advertise = 0;
+		if (get_app(ifname, (u32)i, &app_data) == dcb_success) {
+			app_data.protocol.Advertise = ad;
 			put_app(ifname, (u32)i, &app_data);
-			event_flag |= DCB_LOCAL_CHANGE_APPTLV;
+			event_flag |= DCB_LOCAL_CHANGE_APPTLV(i);
 		}
+	}
 
-		if (get_llink(ifname, (u32)i, &llink_data) == dcb_success &&
-		    llink_data.protocol.Advertise) {
-			llink_data.protocol.Advertise = 0;
+	for (i = 0; i < DCB_MAX_LLKTLV ; i++) {
+		if (get_llink(ifname, (u32)i, &llink_data) == dcb_success) {
+			llink_data.protocol.Advertise = ad;
 			put_llink(ifname, (u32)i, &llink_data);
 			event_flag |= DCB_LOCAL_CHANGE_LLINK;
 		}
 	}
 }
 
-static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf)
+static int _set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len, bool test)
 {
 	int value;
 	int current_value;
@@ -188,25 +192,39 @@ static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 	else
 		return cmd_invalid;
 
-	current_value = is_tlv_txenabled(cmd->ifname, cmd->tlvid);
+	if (test)
+		return cmd_success;
+
+	current_value = is_tlv_txenabled(cmd->ifname, cmd->type, cmd->tlvid);
+
+	snprintf(obuf, obuf_len, "enabled = %s\n", value ? "yes" : "no");
+
 	if (current_value == value)
 		return cmd_success;
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
 		 cmd->tlvid, arg);
 
-	if (set_cfg(cmd->ifname, arg_path, (void *)&value, CONFIG_TYPE_BOOL))
+	if (set_cfg(cmd->ifname, cmd->type, arg_path, &value,
+		    CONFIG_TYPE_BOOL))
 		return cmd_failed;
 
-	/* if DCBX tlv is changed to disabled, then ensure all DCBX features
-	 * are set to 'not advertise'
-	 */
-	if (!value)
-		dont_advertise_dcbx_all(cmd->ifname);
-
-	somethingChangedLocal(cmd->ifname);
+	dont_advertise_dcbx_all(cmd->ifname, value);
+	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
+}
+
+static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_tlvtxenable(cmd, arg, argvalue, obuf, obuf_len, false);
+}
+
+static int test_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			       char *obuf, int obuf_len)
+{
+	return _set_arg_tlvtxenable(cmd, arg, argvalue, obuf, obuf_len, true);
 }
 
 struct arg_handlers *dcbx_get_arg_handlers()
@@ -230,7 +248,6 @@ static int get_dcb_state(char *port_id, char *rbuf)
 static dcb_result set_dcb_state(char *port_id, char *ibuf, int ilen)
 {
 	bool state;
-	int tmp;
 	int off;
 	int plen;
 	dcb_result rval = dcb_success;
@@ -240,18 +257,8 @@ static dcb_result set_dcb_state(char *port_id, char *ibuf, int ilen)
 
 	if (ilen == (off + CFG_DCB_DLEN)) {
 		state = (*(ibuf+off+DCB_STATE)) ^ '0';
-		if (state == false || state == true) {
-			/* if get_hw_state fails, then don't bother
-			 * trying to set the state.
-			*/
-			if (get_hw_state(port_id, &tmp) ||
-				set_hw_state(port_id, state))
-				rval = dcb_failed;
-			else
-				rval = save_dcb_enable_state(port_id, state);
-		} else {
-			rval = dcb_bad_params;
-		}
+		set_hw_state(port_id, state);
+		rval = save_dcb_enable_state(port_id, state);
 	} else {
 		printf("error - setcommand has invalid argument length\n");
 		rval = dcb_bad_params;
@@ -291,6 +298,8 @@ static dcb_result set_dcbx_config(char *ibuf, int ilen)
 		switch (version) {
 		case dcbx_subtype1:
 		case dcbx_subtype2:
+		case dcbx_force_subtype1:
+		case dcbx_force_subtype2:
 			rval = save_dcbx_version(version);
 			break;
 		default:
@@ -358,12 +367,8 @@ static dcb_result set_bwg_desc(char *port_id, char *ibuf, int ilen)
 			printf("pgid = %d, desc_len = %d\n", pgid, desc_len);
 			rval = dcb_bad_params;
 		} else {
-			if (init_cfg()) {
-				rval = put_bwg_descrpt(port_id, pgid-1,
-					ibuf+DCB_PORT_OFF+plen+PG_DESC_DATA);
-			} else {
-				rval = dcb_failed;
-			}
+			rval = put_bwg_descrpt(port_id, pgid-1,
+				ibuf+DCB_PORT_OFF+plen+PG_DESC_DATA);
 		}
 	} else {
 		printf("ilen[%d] != %d\n", ilen, DCB_PORT_OFF + plen +
@@ -375,7 +380,7 @@ static dcb_result set_bwg_desc(char *port_id, char *ibuf, int ilen)
 }
 
 static void set_protocol_data(feature_protocol_attribs *protocol, char *ifname,
-			      char *ibuf, int plen)
+			      char *ibuf, int plen, int agenttype)
 {
 	u8 flag;
 	int last;
@@ -389,11 +394,9 @@ static void set_protocol_data(feature_protocol_attribs *protocol, char *ifname,
 		last = protocol->Advertise;
 		protocol->Advertise = flag & 0x01;
 		if (last != protocol->Advertise && protocol->Advertise) {
-			if (init_cfg()) {
-				tlv_enabletx(ifname, (OUI_CEE_DCBX << 8) |
-					     protocol->dcbx_st);
-				somethingChangedLocal(ifname);
-			}
+			tlv_enabletx(ifname, agenttype, (OUI_CEE_DCBX << 8) |
+				     protocol->dcbx_st);
+			somethingChangedLocal(ifname, agenttype);
 		}
 	}
 
@@ -472,7 +475,7 @@ int dcbx_clif_cmd(void *data,
 		  struct sockaddr_un *from,
 		  socklen_t fromlen,
 		  char *ibuf, int ilen,
-		  char *rbuf)
+		  char *rbuf, int rlen)
 {
 	u8 status=dcb_success;
 	u8 cmd;
@@ -484,6 +487,8 @@ int dcbx_clif_cmd(void *data,
 	pfc_attribs pfc_data;
 	app_attribs app_data;
 	llink_attribs llink_data;
+	struct port *port;
+	struct dcbx_tlvs *dcbx;
 
 	data = (struct clif_data *) data;
 
@@ -501,10 +506,10 @@ int dcbx_clif_cmd(void *data,
 	if (ilen < DCB_PORT_OFF)
 		return dcb_invalid_cmd;
 	
-	if (ibuf[DCB_VER_OFF] != (CLIF_MSG_VERSION | 0x30)) {
-		printf("unsupported client interface message version %x\n",
-			ibuf[DCB_VER_OFF]);
-		return dcb_invalid_cmd;
+	if (ibuf[DCB_VER_OFF] < (CLIF_DCBMSG_VERSION | 0x30)) {
+		printf("unsupported client interface message version %x %x\n",
+			ibuf[DCB_VER_OFF], CLIF_DCBMSG_VERSION | 0x30);
+		return dcb_ctrl_vers_not_compatible;
 	}
 
 	if (ilen < DCB_PORT_OFF+plen) {
@@ -513,14 +518,24 @@ int dcbx_clif_cmd(void *data,
 	}
 
 	/* append standard dcb command response content */
-	sprintf(rbuf , "%*.*s", DCB_PORT_OFF+plen, DCB_PORT_OFF+plen, ibuf);
+	snprintf(rbuf , rlen, "%*.*s",
+		 DCB_PORT_OFF+plen, DCB_PORT_OFF+plen, ibuf);
 
 	memcpy(port_id, ibuf+DCB_PORT_OFF, plen);
 	port_id[plen] = '\0';
 
-	/* check that interface is present and in DCB state */
-	if (feature != FEATURE_DCB && check_port_dcb_mode(port_id) == false)
+	/* Confirm port is a lldpad managed port */
+	port = port_find_by_name(port_id);
+	if (!port)
 		return dcb_device_not_found;
+
+	dcbx = dcbx_data(port->ifname);
+	if (!dcbx)
+		return dcb_device_not_found;
+
+	/* OPER and PEER cmd not applicable while in IEEE-DCBX modes */
+	if (dcbx->active == 0 && (cmd == CMD_GET_PEER || cmd == CMD_GET_OPER))
+		return cmd_not_applicable;
 
 	switch(feature) {
 	case FEATURE_DCB:
@@ -536,11 +551,7 @@ int dcbx_clif_cmd(void *data,
 		if (cmd == CMD_GET_PEER) {
 			status = get_peer_pg(port_id, &pg_data);
 		} else {
-			if (init_cfg()) {
-				status = get_pg(port_id, &pg_data);
-			} else {
-				status = dcb_failed;
-			}
+			status = get_pg(port_id, &pg_data);
 		}
 
 		if (status != dcb_success) {
@@ -555,7 +566,7 @@ int dcbx_clif_cmd(void *data,
 				status = dcb_invalid_cmd;
 			} else {
 				set_protocol_data(&pg_data.protocol, port_id,
-						  ibuf, plen);
+						  ibuf, plen, NEAREST_BRIDGE);
 				status = set_pg_config(&pg_data, port_id, ibuf,
 					ilen);
 			}
@@ -573,11 +584,7 @@ int dcbx_clif_cmd(void *data,
 		if (cmd == CMD_GET_PEER) {
 			status = get_peer_pfc(port_id, &pfc_data);
 		} else {
-			if (init_cfg()) {
-				status = get_pfc(port_id, &pfc_data);
-			} else {
-				status = dcb_failed;
-			}
+			status = get_pfc(port_id, &pfc_data);
 		}
 
 		if (status != dcb_success) {
@@ -592,7 +599,7 @@ int dcbx_clif_cmd(void *data,
 				status = dcb_failed;
 			} else {
 				set_protocol_data(&pfc_data.protocol, port_id,
-						  ibuf, plen);
+						  ibuf, plen, NEAREST_BRIDGE);
 				status = set_pfc_config(&pfc_data, port_id,
 					ibuf, ilen);
 			}
@@ -611,12 +618,7 @@ int dcbx_clif_cmd(void *data,
 		if (cmd == CMD_GET_PEER) {
 			status = get_peer_app(port_id, (u32)subtype, &app_data);
 		} else {
-			if (init_cfg()) {
-				status = get_app(port_id, (u32)subtype,
-					&app_data);
-			} else {
-				status = dcb_failed;
-			}
+			status = get_app(port_id, (u32)subtype, &app_data);
 		}
 
 		if (status != dcb_success) {
@@ -631,7 +633,7 @@ int dcbx_clif_cmd(void *data,
 				status = dcb_failed;
 			} else {
 				set_protocol_data(&app_data.protocol, port_id,
-						  ibuf, plen);
+						  ibuf, plen, NEAREST_BRIDGE);
 				status = set_app_config(&app_data, port_id,
 					(u32)subtype, ibuf, ilen);
 			}
@@ -650,12 +652,7 @@ int dcbx_clif_cmd(void *data,
 			status = get_peer_llink(port_id, (u32)subtype,
 				&llink_data);
 		} else {
-			if (init_cfg()) {
-				status = get_llink(port_id, (u32)subtype,
-					&llink_data);
-			} else {
-				status = dcb_failed;
-			}
+			status = get_llink(port_id, (u32)subtype, &llink_data);
 		}
 
 		if (status != dcb_success) {
@@ -670,7 +667,7 @@ int dcbx_clif_cmd(void *data,
 				status = dcb_failed;
 			} else {
 				set_protocol_data(&llink_data.protocol, port_id,
-						  ibuf, plen);
+						  ibuf, plen, NEAREST_BRIDGE);
 				status = set_llink_config(&llink_data, port_id,
 					(u32)subtype, ibuf, ilen);
 			}
@@ -687,12 +684,8 @@ int dcbx_clif_cmd(void *data,
 
 	case FEATURE_PG_DESC:
 		if (cmd == CMD_GET_CONFIG) {
-			if (init_cfg()) {
-				status = get_bwg_desc(port_id, ibuf, ilen,
-					rbuf+strlen(rbuf));
-			} else {
-				status = dcb_failed;
-			}
+			status = get_bwg_desc(port_id, ibuf, ilen,
+					      rbuf+strlen(rbuf));
 
 			if (status != dcb_success) {
 				printf("error[%d] getting BWG desc for %s\n",
@@ -889,10 +882,11 @@ static int get_llink_data(llink_attribs *llink_data, int cmd, char *port_id,
 static int set_pg_config(pg_attribs *pg_data, char *port_id, char *ibuf,
 	int ilen)
 {
+	pfc_attribs pfc_data;
 	full_dcb_attrib_ptrs dcb_data;
 	u8 flag;
 	dcb_result status = dcb_success;
-	int i;
+	int i, is_pfc;
 	int plen;
 	int off;
 	bool used[MAX_BANDWIDTH_GROUPS];
@@ -906,6 +900,10 @@ static int set_pg_config(pg_attribs *pg_data, char *port_id, char *ibuf,
 			flag = *(ibuf+off+PG_UP2TC(i));
 			if (flag == CLIF_NOT_SUPPLIED)
 				continue;
+
+			if ((flag & 0x07) >= pg_data->num_tcs)
+				return dcb_bad_params;
+
 			pg_data->tx.up[i].tcmap = flag & 0x07;
 			pg_data->rx.up[i].tcmap = flag & 0x07;
 		}
@@ -1018,11 +1016,12 @@ static int set_pg_config(pg_attribs *pg_data, char *port_id, char *ibuf,
 		return status;
 	}
 
-	if (init_cfg()) {
-		status = put_pg(port_id, pg_data);
-	} else {
-		status = dcb_failed;
-	}
+	is_pfc = get_pfc(port_id, &pfc_data);
+	if (is_pfc == dcb_success)
+		status = put_pg(port_id, pg_data, &pfc_data);
+	else
+		status = put_pg(port_id, pg_data, NULL);
+
 	if (status != dcb_success)
 		printf("error[%d] setting PG data for %s\n", status, port_id);
 	
@@ -1058,11 +1057,7 @@ static int set_pfc_config(pfc_attribs *pfc_data, char *port_id, char *ibuf,
 		return dcb_failed;
 	}
 
-	if (init_cfg()) {
-		status = put_pfc(port_id, pfc_data);
-	} else {
-		status = dcb_failed;
-	}
+	status = put_pfc(port_id, pfc_data);
 	if (status != dcb_success)
 		printf("error[%d] setting PFC data for %s\n", status, port_id);
 
@@ -1092,11 +1087,8 @@ static int set_app_config(app_attribs *app_data, char *port_id, u32 subtype,
 		return dcb_failed;
 	}
 
-	if (init_cfg()) {
-		status = put_app(port_id, subtype, app_data);
-	} else {
-		status = dcb_failed;
-	}
+	status = put_app(port_id, subtype, app_data);
+
 	if (status != dcb_success)
 		printf("error[%d] setting APP data for %s\n", status, port_id);
 
@@ -1122,11 +1114,7 @@ static int set_llink_config(llink_attribs *llink_data, char *port_id,
 	if (value != CLIF_NOT_SUPPLIED)
 		llink_data->llink.llink_status = value & 0x0f;
 
-	if (init_cfg()) {
-		status = put_llink(port_id, subtype, llink_data);
-	} else {
-		status = dcb_failed;
-	}
+	status = put_llink(port_id, subtype, llink_data);
 
 	if (status != dcb_success)
 		printf("error[%d] setting logical link data for %s\n",

@@ -20,45 +20,33 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <stdbool.h>
 #include <unistd.h>
 #include <errno.h>
-#include <getopt.h>
-#include <poll.h>
-#include <signal.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/queue.h>
-#include <net/if.h>
-#include <net/if_arp.h>
-#include <net/ethernet.h>
-#include <netpacket/packet.h>
-#include <arpa/inet.h>
-#include <linux/netlink.h>
-#include <linux/rtnetlink.h>
-
-#include <sys/stat.h>
 #include <fcntl.h>
-
-#include "common.h"
+#include <sys/ioctl.h>
+#include <arpa/inet.h>
+#include <net/ethernet.h>
+#include "linux/netlink.h"
+#include "linux/rtnetlink.h"
+#include "linux/dcbnl.h"
+#include "linux/if.h"
 #include "lldp_rtnl.h"
 #include "messages.h"
+#include "lldp.h"
 
 #define NLMSG(c) ((struct nlmsghdr *) (c))
 
-#define LOG(...) log_message(MSG_INFO_DEBUG_STRING, __VA_ARGS__)
-
 #define NLMSG_SIZE 1024
+
+typedef int rtnl_handler(struct nlmsghdr *nh, void *arg);
+
 /**
  * rtnl_recv - receive from a routing netlink socket
  * @s: routing netlink socket with data ready to be received
@@ -75,13 +63,10 @@ static int rtnl_recv(int s, rtnl_handler *fn, void *arg)
 	int rc = 0;
 	bool more = false;
 
-	LOG("%s", __func__);
 more:
 	len = recv(s, buf, sizeof(buf), 0);
-	if (len < 0) {
-		LOG("netlink recvmsg error");
+	if (len < 0)
 		return len;
-	}
 
 	for (nh = NLMSG(buf); NLMSG_OK(nh, len); nh = NLMSG_NEXT(nh, len)) {
 		if (nh->nlmsg_flags & NLM_F_MULTI)
@@ -89,20 +74,14 @@ more:
 
 		switch (nh->nlmsg_type) {
 		case NLMSG_NOOP:
-			LOG("NLMSG_NOOP");
 			break;
 		case NLMSG_ERROR:
 			rc = ((struct nlmsgerr *)NLMSG_DATA(nh))->error;
-			LOG("NLMSG_ERROR (%d) %s", rc, strerror(-rc));
 			break;
 		case NLMSG_DONE:
 			more = false;
-			LOG("NLMSG_DONE");
 			break;
 		default:
-			if (!fn || fn(nh, arg) < 0)
-				LOG("unexpected netlink message type %d",
-					 nh->nlmsg_type);
 			break;
 		}
 	}
@@ -125,21 +104,8 @@ static void add_rtattr(struct nlmsghdr *n, int type, const void *data, int alen)
 	n->nlmsg_len = NLMSG_ALIGN(n->nlmsg_len) + RTA_ALIGN(len);
 }
 
-static struct rtattr *add_rtattr_nest(struct nlmsghdr *n, int type)
-{
-	struct rtattr *nest = NLMSG_TAIL(n);
-
-	add_rtattr(n, type, NULL, 0);
-	return nest;
-}
-
-static void end_rtattr_nest(struct nlmsghdr *n, struct rtattr *nest)
-{
-	nest->rta_len = (void *)NLMSG_TAIL(n) - (void *)nest;
-}
-
 static ssize_t rtnl_send_linkmode(int s, int ifindex,
-				  char *ifname, __u8 linkmode)
+				  const char *ifname, __u8 linkmode)
 {
 	struct {
 		struct nlmsghdr nh;
@@ -165,7 +131,7 @@ static ssize_t rtnl_send_linkmode(int s, int ifindex,
 	return send(s, &req, req.nh.nlmsg_len, 0);
 }
 
-static int rtnl_set_linkmode(int ifindex, char *ifname, __u8 linkmode)
+static int rtnl_set_linkmode(int ifindex, const char *ifname, __u8 linkmode)
 {
 	int s;
 	int rc;
@@ -221,6 +187,8 @@ static ssize_t rtnl_recv_operstate(int s, int ifindex,
 	nlh = malloc(NLMSG_SIZE);
 	if (!nlh)
 		return rc;
+
+	memset(nlh, 0, NLMSG_SIZE);
 
 	/* send ifname request */
 	nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
@@ -286,7 +254,7 @@ int get_operstate(char *ifname)
 	ifq = socket(PF_PACKET, SOCK_DGRAM, 0);
 	if (ifq < 0)
 		return ifq;
-	os_strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name) - 1);
+	strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name) - 1);
 	if (ioctl(ifq, SIOCGIFINDEX, &ifr) == 0)
 		ifindex = ifr.ifr_ifindex;
 	close(ifq);
@@ -300,7 +268,74 @@ int get_operstate(char *ifname)
 	return operstate;
 }
 
-int set_linkmode(char *ifname, __u8 linkmode)
+int set_linkmode(const char *ifname, __u8 linkmode)
 {
 	return rtnl_set_linkmode(0, ifname, linkmode);
+}
+
+int get_perm_hwaddr(const char *ifname, u8 *buf_perm, u8 *buf_san)
+{
+	int s;
+	struct rtattr *rta;
+	int rc = 0;
+
+	struct {
+		struct nlmsghdr nh;
+		struct dcbmsg d;
+		union {
+			struct rtattr rta;
+			char attrbuf[RTA_SPACE(DCB_ATTR_IFNAME) +
+				     RTA_SPACE(DCB_ATTR_PERM_HWADDR)];
+		} u;
+	} req = {
+		.nh = {
+			.nlmsg_len = NLMSG_LENGTH(sizeof(struct dcbmsg)),
+			.nlmsg_type = RTM_GETDCB,
+			.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK,
+		},
+		.d = {
+			.cmd = DCB_CMD_GPERM_HWADDR,
+			.dcb_family = AF_UNSPEC,
+			.dcb_pad = 0,
+		},
+	};
+
+
+	s = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
+	if (s < 0) {
+		rc = -EIO;
+		goto out_nosock;
+	}
+
+	add_rtattr(&req.nh, DCB_ATTR_IFNAME, ifname, strlen(ifname) + 1);
+	add_rtattr(&req.nh, DCB_ATTR_PERM_HWADDR, NULL, 0);
+
+	rc = send(s, &req.nh, req.nh.nlmsg_len, 0);
+	if (rc < 0)
+		goto out;
+
+	/* recv ifname reply */
+	memset(&req, 0, sizeof(req));
+	rc = recv(s, (void *) &req, sizeof(req), MSG_DONTWAIT);
+	if (rc < 0)
+		goto out;
+
+	if (req.d.cmd != DCB_CMD_GPERM_HWADDR) {
+		rc = -EIO;
+		goto out;
+	}
+
+	rta = &req.u.rta;
+	if (rta->rta_type != DCB_ATTR_PERM_HWADDR) {
+		/* Do we really want to code up an attribute parser?? */
+		rc = -EIO;
+		goto out;
+	}
+
+	memcpy(buf_perm, RTA_DATA(rta), ETH_ALEN);
+	memcpy(buf_san, RTA_DATA(rta) + ETH_ALEN, ETH_ALEN);
+out:
+	close(s);
+out_nosock:
+	return rc;
 }

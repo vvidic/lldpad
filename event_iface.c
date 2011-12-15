@@ -1,7 +1,14 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2011 Intel Corporation.
+
+  implementation of libvirt netlink interface
+  (c) Copyright IBM Corp. 2010
+
+  Author(s): Jens Osterkamp <jens at linux.vnet.ibm.com>
+	     Stefan Berger <stefanb at linux.vnet.ibm.com>
+	     Gerhard Stenzel <gstenzel at linux.vnet.ibm.com>
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -20,69 +27,162 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
+#include <sys/queue.h>
 #include <sys/socket.h>
-#include <linux/rtnetlink.h>
-#include <linux/if.h>
-#include <linux/if_vlan.h>
 #include <linux/sockios.h>
+#include <netlink/attr.h>
+#include <netlink/msg.h>
 #include <syslog.h>
 #include <unistd.h>
+#include "linux/if.h"
+#include "linux/if_vlan.h"
+#include "linux/rtnetlink.h"
+#include "linux/if_link.h"
 #include "lldpad.h"
 #include "lldp_mod.h"
-#include "common.h"
 #include "eloop.h"
-#include "drv_cfg.h"
 #include "event_iface.h"
 #include "lldp_util.h"
-#include "dcb_driver_interface.h"
 #include "config.h"
 #include "lldp/l2_packet.h"
 #include "config.h"
 #include "lldp/states.h"
+#include "messages.h"
+#include "lldp_rtnl.h"
+#include "lldp_vdp.h"
+#include "lldp_tlv.h"
 
-static void event_if_decode_rta(int type, struct rtattr *rta);
+#define MAX_PAYLOAD 4096 /* maximum payload size */
 
-#define MAX_PAYLOAD 4096  /* maximum payload size*/
+extern unsigned int if_nametoindex(const char *);
+extern char *if_indextoname(unsigned int, char *);
 
-static char *device_name = NULL;
-static int link_status = 0;
-
-static void event_if_decode_rta(int type, struct rtattr *rta)
+static struct nla_policy ifla_vf_policy[IFLA_VF_MAX + 1] =
 {
+	[IFLA_VF_MAC] = { .minlen = sizeof(struct ifla_vf_mac),
+			  .maxlen = sizeof(struct ifla_vf_mac)},
+	[IFLA_VF_VLAN] = { .minlen = sizeof(struct ifla_vf_vlan),
+			   .maxlen = sizeof(struct ifla_vf_vlan)},
+};
 
-	TRACE1("    rta_type  =", rta->rta_len);
-	
+static struct nla_policy ifla_vf_ports_policy[IFLA_VF_PORT_MAX + 1] =
+{
+	[IFLA_VF_PORT] = { .type = NLA_NESTED },
+};
+
+static struct nla_policy ifla_port_policy[IFLA_PORT_MAX + 1] =
+{
+	[IFLA_PORT_VF]            = { .type = NLA_U32 },
+	[IFLA_PORT_PROFILE]       = { .type = NLA_STRING },
+	[IFLA_PORT_VSI_TYPE]      = { .minlen = sizeof(struct ifla_port_vsi) },
+	[IFLA_PORT_INSTANCE_UUID] = { .minlen = PORT_UUID_MAX,
+				      .maxlen = PORT_UUID_MAX, },
+	[IFLA_PORT_HOST_UUID]     = { .minlen = PORT_UUID_MAX,
+				      .maxlen = PORT_UUID_MAX, },
+	[IFLA_PORT_REQUEST]       = { .type = NLA_U8  },
+	[IFLA_PORT_RESPONSE]      = { .type = NLA_U16 },
+};
+
+static void event_if_decode_rta(int type, struct rtattr *rta, int *ls, char *d)
+{
 	switch (type) {
 	case IFLA_ADDRESS:
-		TRACE(" IFLA_ADDRESS\n");
+		LLDPAD_DBG(" IFLA_ADDRESS\n");
 		break;
 	case IFLA_BROADCAST:
-		TRACE(" IFLA_BROADCAST\n");
-		break;
-	case IFLA_OPERSTATE:
-		TRACE1(" IFLA_OPERSTATE ", type);
-		link_status = (*((int *)RTA_DATA(rta)));
-		break;
-	case IFLA_LINKMODE:
-		TRACE1(" IFLA_LINKMODE  ", type)
-		TRACE2("        LINKMODE = ", (*((int *)RTA_DATA(rta)))? 
-			"IF_LINK_MODE_DORMANT": "IF_LINK_MODE_DEFAULT")
+		LLDPAD_DBG(" IFLA_BROADCAST\n");
 		break;
 	case IFLA_IFNAME:
-		device_name =  (char *)RTA_DATA(rta);
-		TRACE(" IFLA_IFNAME\n")
-		TRACE2(" device name is ", device_name)
+		strncpy(d, (char *)RTA_DATA(rta), IFNAMSIZ);
+		LLDPAD_DBG(" IFLA_IFNAME\n");
+		LLDPAD_DBG("        device name is %s\n", d);
+		break;
+	case IFLA_MTU:
+		LLDPAD_DBG(" IFLA_MTU\n");
+		break;
+	case IFLA_LINK:
+		LLDPAD_DBG(" IFLA_LINK\n");
+		break;
+	case IFLA_QDISC:
+		LLDPAD_DBG(" IFLA_QDISC\n");
+		break;
+	case IFLA_STATS:
+		LLDPAD_DBG(" IFLA_STATS\n");
+		break;
+	case IFLA_COST:
+		LLDPAD_DBG(" IFLA_COST\n");
+		break;
+	case IFLA_PRIORITY:
+		LLDPAD_DBG(" IFLA_PRIORITY\n");
+		break;
+	case IFLA_MASTER:
+		LLDPAD_DBG(" IFLA_MASTER\n");
+		break;
+	case IFLA_WIRELESS:
+		LLDPAD_DBG(" IFLA_WIRELESS\n");
+		break;
+	case IFLA_PROTINFO:
+		LLDPAD_DBG(" IFLA_PROTINFO\n");
+		break;
+	case IFLA_TXQLEN:
+		LLDPAD_DBG(" IFLA_TXQLEN\n");
+		break;
+	case IFLA_MAP:
+		LLDPAD_DBG(" IFLA_MAP\n");
+		break;
+	case IFLA_WEIGHT:
+		LLDPAD_DBG(" IFLA_WEIGHT\n");
+		break;
+	case IFLA_OPERSTATE:
+		LLDPAD_DBG(" IFLA_OPERSTATE\n");
+		*ls = (*((int *)RTA_DATA(rta)));
+		LLDPAD_DBG("        OPERSTATE = 0x%02x\n", *ls);
+		break;
+	case IFLA_LINKMODE:
+		LLDPAD_DBG(" IFLA_LINKMODE\n");
+		LLDPAD_DBG("        LINKMODE = %s\n", (*((int *)RTA_DATA(rta)))?
+			"IF_LINK_MODE_DORMANT": "IF_LINK_MODE_DEFAULT");
+		break;
+	case IFLA_LINKINFO:
+		LLDPAD_DBG(" IFLA_LINKINFO\n");
+		break;
+	case IFLA_NET_NS_PID:
+		LLDPAD_DBG(" IFLA_NET_NS_PID\n");
+		break;
+	case IFLA_IFALIAS:
+		LLDPAD_DBG(" IFLA_IFALIAS\n");
+		break;
+	case IFLA_NUM_VF:
+		LLDPAD_DBG(" IFLA_NUMVF\n");
+		break;
+	case IFLA_VFINFO_LIST:
+		LLDPAD_DBG(" IFLA_VFINFO_LIST\n");
+		break;
+	case IFLA_STATS64:
+		LLDPAD_DBG(" IFLA_STATS64\n");
+		break;
+	case IFLA_VF_PORTS:
+		LLDPAD_DBG(" IFLA_VF_PORTS\n");
+		break;
+	case IFLA_PORT_SELF:
+		LLDPAD_DBG(" IFLA_PORT_SELF\n");
+		break;
+	case IFLA_AF_SPEC:
+		LLDPAD_DBG(" IFLA_AF_SPEC\n");
+		break;
+	case IFLA_GROUP:
+		LLDPAD_DBG(" IFLA_GROUP\n");
 		break;
 	default:
-		TRACE1(" unknown type : ", type)
+		LLDPAD_DBG(" unknown type : 0x%02x\n", type);
 		break;
 	}
 }
@@ -90,9 +190,8 @@ static void event_if_decode_rta(int type, struct rtattr *rta)
 int oper_add_device(char *device_name)
 {
 	struct lldp_module *np;
-	const struct lldp_mod_ops *ops;
-	struct port *port;
-	int err;
+	struct port *port, *newport;
+	struct lldp_agent *agent;
 
 	port = porthead;
 	while (port != NULL) {
@@ -103,28 +202,35 @@ int oper_add_device(char *device_name)
 
 	if (!port) {
 		if (is_bond(device_name))
-			err = add_bond_port(device_name);
+			newport = add_bond_port(device_name);
 		else
-			err = add_adapter(device_name);
+			newport = add_port(device_name);
 
-		if (err) {
-			printf("%s: Error adding device %s\n",
+		if (newport == NULL) {
+			LLDPAD_INFO("%s: Error adding device %s\n",
 				__func__, device_name);
-			return err;
-		} else
-			printf("%s: Adding device %s\n",
-				__func__, device_name);
+			return -EINVAL;
+		}
+
+		LLDPAD_INFO("%s: Adding device %s\n", __func__, device_name);
+		port = newport;
 	} else if (!port->portEnabled)
 		reinit_port(device_name);
 
-	if (!port || !port->portEnabled) {
+	lldp_add_agent(device_name, NEAREST_BRIDGE);
+	lldp_add_agent(device_name, NEAREST_NONTPMR_BRIDGE);
+	lldp_add_agent(device_name, NEAREST_CUSTOMER_BRIDGE);
+
+	LIST_FOREACH(agent, &port->agent_head, entry) {
+		LLDPAD_DBG("%s: calling ifup for agent %p.\n",
+			   __func__, agent);
 		LIST_FOREACH(np, &lldp_head, lldp) {
-			ops = np->ops;
-			if (ops->lldp_mod_ifup)
-				ops->lldp_mod_ifup(device_name);
+			if (np->ops->lldp_mod_ifup)
+				np->ops->lldp_mod_ifup(device_name, agent);
 		}
 	}
-	set_lldp_port_enable_state(device_name, 1);
+
+	set_lldp_port_enable(device_name, 1);
 	return 0;
 }
 
@@ -133,24 +239,27 @@ static void event_if_decode_nlmsg(int route_type, void *data, int len)
 	struct lldp_module *np;
 	const struct lldp_mod_ops *ops;
 	struct rtattr *rta;
+	char device_name[IFNAMSIZ];
+	struct lldp_agent *agent;
 	int attrlen;
-	int val, err;
+	int valid;
+	int link_status = IF_OPER_UNKNOWN;
 
 	switch (route_type) {
 	case RTM_NEWLINK:		
 	case RTM_DELLINK:
 	case RTM_SETLINK:
 	case RTM_GETLINK:
-		TRACE("  IFINFOMSG\n");
-		TRACE1("  ifi_family = ",
+		LLDPAD_DBG(" IFINFOMSG\n");
+		LLDPAD_DBG("        ifi_family = 0x%02x\n",
 			((struct ifinfomsg *)data)->ifi_family);
-		TRACE1("  ifi_type   = ",
+		LLDPAD_DBG("        ifi_type   = 0x%x\n",
 			((struct ifinfomsg *)data)->ifi_type);
-		TRACE1("  ifi_index  = ",
+		LLDPAD_DBG("        ifi_index  = %i\n",
 			((struct ifinfomsg *)data)->ifi_index);
-		TRACE1("  ifi_flags  = ",
+		LLDPAD_DBG("        ifi_flags  = 0x%04x\n",
 			((struct ifinfomsg *)data)->ifi_flags);
-		TRACE1("  ifi_change = ",
+		LLDPAD_DBG("        ifi_change = 0x%04x\n",
 			((struct ifinfomsg *)data)->ifi_change);
 
 		/* print attributes */
@@ -158,53 +267,60 @@ static void event_if_decode_nlmsg(int route_type, void *data, int len)
 
 		attrlen = len - sizeof(struct ifinfomsg);
 		while (RTA_OK(rta, attrlen)) {
-			event_if_decode_rta(rta->rta_type, rta);
+			event_if_decode_rta(rta->rta_type, rta,
+					    &link_status, device_name);
 			rta = RTA_NEXT(rta, attrlen);
 		}
 
-		TRACE1("link status: ", link_status);
-		TRACE2("device name: ", device_name);
+		LLDPAD_DBG("        link status: %i\n", link_status);
+		LLDPAD_DBG("        device name: %s\n", device_name);
 
 		switch (link_status) {
 		case IF_OPER_DOWN:
-			printf("******* LINK DOWN: %s\n", device_name);
+			LLDPAD_DBG("******* LINK DOWN: %s\n", device_name);
 
-			err = is_valid_lldp_device(device_name);
-			if (!err)
+			valid = is_valid_lldp_device(device_name);
+			if (!valid)
 				break;
 
-			LIST_FOREACH(np, &lldp_head, lldp) {
-				ops = np->ops;
-				if (ops->lldp_mod_ifdown)
-					ops->lldp_mod_ifdown(device_name);
+			struct port *port = port_find_by_name(device_name);
+			if (!port)
+				break;
+
+			LIST_FOREACH(agent, &port->agent_head, entry) {
+				LLDPAD_DBG("%s: calling ifdown for agent %p.\n",
+					   __func__, agent);
+				LIST_FOREACH(np, &lldp_head, lldp) {
+					ops = np->ops;
+					if (ops->lldp_mod_ifdown)
+						ops->lldp_mod_ifdown(device_name,
+								     agent);
+				}
 			}
 
 			/* Disable Port */
-			set_lldp_port_enable_state(device_name, 0);
+			set_lldp_port_enable(device_name, 0);
 
 			if (route_type == RTM_DELLINK) {
-				printf("%s: %s: device removed!\n",
+				LLDPAD_INFO("%s: %s: device removed!\n",
 					__func__, device_name);
-				remove_adapter(device_name);
+				remove_port(device_name);
 			}
 			break;
 		case IF_OPER_DORMANT:
-			printf("******* LINK DORMANT: %s\n", device_name);
-			err = is_valid_lldp_device(device_name);
-			if (!err)
+			LLDPAD_DBG("******* LINK DORMANT: %s\n", device_name);
+			valid = is_valid_lldp_device(device_name);
+			if (!valid)
 				break;
 			set_port_oper_delay(device_name);
 			oper_add_device(device_name);
 			break;
 		case IF_OPER_UP:
-			printf("******* LINK UP: %s\n",	device_name);
-			err = is_valid_lldp_device(device_name);
-			if (!err)
+			LLDPAD_DBG("******* LINK UP: %s\n", device_name);
+			valid = is_valid_lldp_device(device_name);
+			if (!valid)
 				break;
 			oper_add_device(device_name);
-			printf("%s: %s: Programming HW on LINK_UP\n",
-				__func__, device_name);
-			set_hw_all(device_name);
 			break;
 		default:
 			break;
@@ -213,27 +329,564 @@ static void event_if_decode_nlmsg(int route_type, void *data, int len)
 	case RTM_NEWADDR:
 	case RTM_DELADDR:
 	case RTM_GETADDR:
-		TRACE("Address change.\n");
+		LLDPAD_DBG("Address change.\n");
 		break;
 	default:
-		TRACE("No decode for this type\n");
+		LLDPAD_DBG("No decode for this type\n");
 	}
 }
 
-
 static void event_if_process_recvmsg(struct nlmsghdr *nlmsg)
 {
-
-	/* print out details */
+	LLDPAD_DBG("%s:%s: nlmsg_type: %d\n", __FILE__, __FUNCTION__, nlmsg->nlmsg_type);
 	event_if_decode_nlmsg(nlmsg->nlmsg_type, NLMSG_DATA(nlmsg),
 		NLMSG_PAYLOAD(nlmsg, 0));
+}
+
+static int event_if_parse_getmsg(struct nlmsghdr *nlh, int *ifindex,
+				 char *ifname)
+{
+	struct nlattr *tb[IFLA_MAX+1];
+	struct ifinfomsg *ifinfo;
+
+	if (nlmsg_parse(nlh, sizeof(struct ifinfomsg),
+			(struct nlattr **)&tb, IFLA_MAX, NULL)) {
+		LLDPAD_ERR("Error parsing GETLINK request...\n");
+		return -EINVAL;
+	}
+
+	if (tb[IFLA_IFNAME]) {
+		ifname = (char *)RTA_DATA(tb[IFLA_IFNAME]);
+		LLDPAD_DBG("IFLA_IFNAME=%s\n", ifname);
+	} else {
+		ifinfo = (struct ifinfomsg *)NLMSG_DATA(nlh);
+		*ifindex = ifinfo->ifi_index;
+		LLDPAD_DBG("interface index: %d\n", ifinfo->ifi_index);
+	}
+
+	return 0;
+}
+
+static int event_if_parse_setmsg(struct nlmsghdr *nlh)
+{
+	struct nlattr *tb[IFLA_MAX+1],
+		      *tb3[IFLA_PORT_MAX+1],
+		      *tb_vfinfo[IFLA_VF_MAX+1],
+		      *tb_vfinfo_list;
+	struct vsi_profile *profile, *p;
+	struct mac_vlan *mac_vlan;
+	struct ifinfomsg *ifinfo;
+	struct vdp_data *vd;
+	char *ifname;
+	int rem;
+	int ret = 0;
+
+	if (nlmsg_parse(nlh, sizeof(struct ifinfomsg),
+			(struct nlattr **)&tb, IFLA_MAX, NULL)) {
+		LLDPAD_ERR("Error parsing request...\n");
+		return -EINVAL;
+	}
+
+	LLDPAD_DBG("%s(%d): nlmsg_len %i\n", __FILE__, __LINE__, nlh->nlmsg_len);
+
+	if (tb[IFLA_IFNAME]) {
+		ifname = (char *)RTA_DATA(tb[IFLA_IFNAME]);
+	} else {
+		ifname = malloc(IFNAMSIZ);
+		ifinfo = (struct ifinfomsg *)NLMSG_DATA(nlh);
+		LLDPAD_DBG("interface index: %d\n", ifinfo->ifi_index);
+		if (!if_indextoname(ifinfo->ifi_index, ifname)) {
+			LLDPAD_ERR("Could not find name for interface %i !\n", ifinfo->ifi_index);
+			return -ENXIO;
+		}
+	}
+
+	LLDPAD_DBG("IFLA_IFNAME=%s\n", ifname);
+
+	vd = vdp_data(ifname);
+	if (!vd) {
+		LLDPAD_ERR("interface %s has not yet been configured !\n", ifname);
+		return -ENXIO;
+	}
+
+	if (!tb[IFLA_VFINFO_LIST]) {
+		LLDPAD_ERR("IFLA_VFINFO_LIST missing.\n");
+		return -EINVAL;
+	} else {
+		LLDPAD_DBG("FOUND IFLA_VFINFO_LIST!\n");
+	}
+
+	nla_for_each_nested(tb_vfinfo_list, tb[IFLA_VFINFO_LIST], rem) {
+		if (nla_type(tb_vfinfo_list) != IFLA_VF_INFO) {
+			LLDPAD_ERR("nested parsing of IFLA_VFINFO_LIST failed.\n");
+			return -EINVAL;
+		}
+
+		if (nla_parse_nested(tb_vfinfo, IFLA_VF_MAX, tb_vfinfo_list,
+				     ifla_vf_policy)) {
+			LLDPAD_ERR("nested parsing of IFLA_VF_INFO failed.\n");
+			return -EINVAL;
+		}
+	}
+
+	/* TODO: vdp_create_profile */
+	profile = malloc(sizeof(struct vsi_profile));
+	if (!profile)
+		return -ENOMEM;
+	memset(profile, 0, sizeof(struct vsi_profile));
+	LIST_INIT(&profile->macvid_head);
+
+	if (tb_vfinfo[IFLA_VF_MAC]) {
+		struct ifla_vf_mac *mac = RTA_DATA(tb_vfinfo[IFLA_VF_MAC]);
+		u8 *m = mac->mac;
+		LLDPAD_DBG("IFLA_VF_MAC=%2x:%2x:%2x:%2x:%2x:%2x\n",
+			m[0], m[1], m[2], m[3], m[4], m[5]);
+		mac_vlan = malloc(sizeof(struct mac_vlan));
+		if (!mac_vlan) {
+			ret = -ENOMEM;
+			goto out_err;
+		}
+		memset(mac_vlan, 0, sizeof(struct mac_vlan));
+		memcpy(&mac_vlan->mac, m, ETH_ALEN);
+	}
+
+	if (tb_vfinfo[IFLA_VF_VLAN]) {
+		struct ifla_vf_vlan *vlan = RTA_DATA(tb_vfinfo[IFLA_VF_VLAN]);
+		LLDPAD_DBG("IFLA_VF_VLAN=%d\n", vlan->vlan);
+		if (!mac_vlan) {
+			ret = -ENOMEM;
+			goto out_err;
+		}
+		mac_vlan->vlan = (u16) vlan->vlan;
+	}
+
+	LIST_INSERT_HEAD(&profile->macvid_head, mac_vlan, entry);
+	profile->entries++;
+
+	if (tb[IFLA_VF_PORTS]) {
+		struct nlattr *tb_vf_ports;
+
+		LLDPAD_DBG("FOUND IFLA_VF_PORTS\n");
+
+		nla_for_each_nested(tb_vf_ports, tb[IFLA_VF_PORTS], rem) {
+
+			LLDPAD_DBG("ITERATING\n");
+
+			if (nla_type(tb_vf_ports) != IFLA_VF_PORT) {
+				LLDPAD_DBG("not a IFLA_VF_PORT. skipping\n");
+				continue;
+			}
+
+			if (nla_parse_nested(tb3, IFLA_PORT_MAX, tb_vf_ports,
+					     ifla_port_policy)) {
+				LLDPAD_ERR("nested parsing on level 2 failed.\n");
+				ret = -EINVAL;
+				goto out_err;
+			}
+
+			if (tb3[IFLA_PORT_VF]) {
+				LLDPAD_DBG("IFLA_PORT_VF=%d\n", *(uint32_t*)(RTA_DATA(tb3[IFLA_PORT_VF])));
+			}
+
+			if (tb3[IFLA_PORT_PROFILE]) {
+				LLDPAD_DBG("IFLA_PORT_PROFILE=%s\n", (char *)RTA_DATA(tb3[IFLA_PORT_PROFILE]));
+			}
+
+			if (tb3[IFLA_PORT_VSI_TYPE]) {
+				struct ifla_port_vsi *pvsi;
+				int tid = 0;
+
+				pvsi = (struct ifla_port_vsi*)RTA_DATA(tb3[IFLA_PORT_VSI_TYPE]);
+				tid = pvsi->vsi_type_id[2] << 16 |
+					pvsi->vsi_type_id[1] << 8 |
+					pvsi->vsi_type_id[0];
+
+				LLDPAD_DBG("mgr_id : %d\n", pvsi->vsi_mgr_id);
+				LLDPAD_DBG("type_id : %d\n", tid);
+				LLDPAD_DBG("type_version : %d\n", pvsi->vsi_type_version);
+
+				profile->mgrid = pvsi->vsi_mgr_id;
+				profile->id = tid;
+				profile->version = pvsi->vsi_type_version;
+			}
+
+			if (tb3[IFLA_PORT_INSTANCE_UUID]) {
+				unsigned char *uuid;
+				uuid = (unsigned char *)RTA_DATA(tb3[IFLA_PORT_INSTANCE_UUID]);
+
+				char instance[INSTANCE_STRLEN+2];
+				instance2str(uuid, instance, sizeof(instance));
+				LLDPAD_DBG("IFLA_PORT_INSTANCE_UUID=%s\n", instance);
+
+				memcpy(&profile->instance,
+				       RTA_DATA(tb3[IFLA_PORT_INSTANCE_UUID]), 16);
+			}
+
+			if (tb3[IFLA_PORT_REQUEST]) {
+				LLDPAD_DBG("IFLA_PORT_REQUEST=%d\n",
+					*(uint8_t*)RTA_DATA(tb3[IFLA_PORT_REQUEST]));
+					profile->mode = *(uint8_t*)RTA_DATA(tb3[IFLA_PORT_REQUEST]);
+			}
+
+			if (tb3[IFLA_PORT_RESPONSE]) {
+				LLDPAD_DBG("IFLA_PORT_RESPONSE=%d\n",
+					*(uint16_t*)RTA_DATA(tb3[IFLA_PORT_RESPONSE]));
+				profile->response = *(uint16_t*)RTA_DATA(tb3[IFLA_PORT_RESPONSE]);
+			}
+		}
+	}
+
+	struct port *port = port_find_by_name(ifname);
+
+	if (port) {
+		profile->port = port;
+	} else {
+		LLDPAD_ERR("%s(%i): Could not find port for %s\n", __func__,
+		       __LINE__, ifname);
+		ret = -EEXIST;
+		goto out_err;
+	}
+
+	/* If the link is down, reject request */
+	if ((!port->portEnabled) && (profile->mode != VDP_MODE_DEASSOCIATE)) {
+		LLDPAD_WARN("%s(%i): Unable to associate, port %s not enabled !\n", __func__,
+		       __LINE__, ifname);
+		ret = -ENXIO;
+		goto out_err;
+	}
+
+	p = vdp_add_profile(profile);
+
+	if (!p)
+		goto out_err;
+
+	vdp_print_profile(p);
+
+	if (p != profile)
+		goto out_err;
+
+	return ret;
+
+out_err:
+	free(profile);
+	return ret;
+}
+
+static void event_if_parseResponseMsg(struct nlmsghdr *nlh)
+{
+	struct nlattr *tb[IFLA_MAX+1],
+		      *tb2[IFLA_VF_PORT_MAX + 1],
+		      *tb3[IFLA_PORT_MAX+1];
+
+	if (nlmsg_parse(nlh, sizeof(struct ifinfomsg),
+			(struct nlattr **)&tb, IFLA_MAX, NULL)) {
+		LLDPAD_ERR("Error parsing netlink response...\n");
+		return;
+	}
+
+	if (tb[IFLA_IFNAME]) {
+		LLDPAD_DBG("IFLA_IFNAME=%s\n", (char *)RTA_DATA(tb[IFLA_IFNAME]));
+	} else {
+		struct ifinfomsg *ifinfo = (struct ifinfomsg *)NLMSG_DATA(nlh);
+		LLDPAD_DBG("interface index: %d\n", ifinfo->ifi_index);
+	}
+
+	if (tb[IFLA_VF_PORTS]) {
+			if (nla_parse_nested(tb2, IFLA_VF_PORT_MAX, tb[IFLA_VF_PORTS],
+					     ifla_vf_ports_policy)) {
+				LLDPAD_ERR("nested parsing on level 1 failed.\n");
+				return;
+			}
+
+	        if (tb2[IFLA_VF_PORT]) {
+			if (nla_parse_nested(tb3, IFLA_PORT_MAX, tb2[IFLA_VF_PORT],
+					     ifla_port_policy)) {
+				LLDPAD_ERR("nested parsing on level 2 failed.\n");
+				return;
+			}
+
+			if (tb3[IFLA_PORT_VF]) {
+				LLDPAD_DBG("IFLA_PORT_VF=%d\n", *(uint32_t*)(RTA_DATA(tb3[IFLA_PORT_VF])));
+			}
+
+			if (tb3[IFLA_PORT_PROFILE]) {
+				LLDPAD_DBG("IFLA_PORT_PROFILE=%s\n", (char *)RTA_DATA(tb3[IFLA_PORT_PROFILE]));
+			}
+
+			if (tb3[IFLA_PORT_VSI_TYPE]) {
+				struct ifla_port_vsi *pvsi;
+				int tid = 0;
+				pvsi = (struct ifla_port_vsi*)RTA_DATA(tb3[IFLA_PORT_VSI_TYPE]);
+				tid = pvsi->vsi_type_id[2] << 16 |
+					pvsi->vsi_type_id[1] << 8 |
+					pvsi->vsi_type_id[0];
+				LLDPAD_DBG("mgr_id : %d "
+					"type_id : %d "
+					"type_version : %d\n",
+					pvsi->vsi_mgr_id,
+					tid,
+					pvsi->vsi_type_version);
+			}
+
+			if (tb3[IFLA_PORT_INSTANCE_UUID]) {
+				unsigned char *uuid;
+				uuid = (unsigned char *)RTA_DATA(tb3[IFLA_PORT_INSTANCE_UUID]);
+
+				char instance[INSTANCE_STRLEN+2];
+				instance2str(uuid, instance, sizeof(instance));
+				LLDPAD_DBG("IFLA_PORT_INSTANCE_UUID=%s\n", &instance[0]);
+			}
+
+			if (tb3[IFLA_PORT_REQUEST]) {
+				LLDPAD_DBG("IFLA_PORT_REQUEST=%d\n",
+					*(uint8_t*)RTA_DATA(tb3[IFLA_PORT_REQUEST]));
+			}		
+			if (tb3[IFLA_PORT_RESPONSE]) {
+				LLDPAD_DBG("IFLA_PORT_RESPONSE=%d\n",
+					*(uint16_t*)RTA_DATA(tb3[IFLA_PORT_RESPONSE]));
+			}
+		}
+	}
+}
+
+struct nl_msg *event_if_constructResponse(struct nlmsghdr *nlh, int ifindex)
+{
+	struct nl_msg *nl_msg;
+	struct nlattr *vf_ports = NULL, *vf_port;
+	struct ifinfomsg ifinfo;
+	struct vdp_data *vd;
+	uint32_t pid = nlh->nlmsg_pid;
+	uint32_t seq = nlh->nlmsg_seq;
+	char *ifname = malloc(IFNAMSIZ);
+	struct vsi_profile *p;
+
+	nl_msg = nlmsg_alloc();
+
+	if (!nl_msg) {
+		LLDPAD_ERR("%s(%i): Unable to allocate netlink message !\n", __func__, __LINE__);
+		return NULL;
+	}
+
+	if (!if_indextoname(ifindex, ifname)) {
+		LLDPAD_ERR("%s(%i): No name found for interface with index %i !\n", __func__, __LINE__,
+		       ifindex);
+	}
+
+	vd = vdp_data(ifname);
+	if (!vd) {
+		LLDPAD_ERR("%s(%i): Could not find vdp_data for %s !\n", __func__, __LINE__,
+		       ifname);
+		return NULL;
+	}
+
+	free(ifname);
+
+	if (nlmsg_put(nl_msg, pid, seq, NLMSG_DONE, 0, 0) == NULL)
+		goto err_exit;
+
+	ifinfo.ifi_index = ifindex;
+
+	if (nlmsg_append(nl_msg, &ifinfo, sizeof(ifinfo), NLMSG_ALIGNTO) < 0)
+		goto err_exit;
+
+	vf_ports = nla_nest_start(nl_msg, IFLA_VF_PORTS);
+
+	if (!vf_ports)
+		goto err_exit;
+
+	/* loop over all existing profiles on this interface and
+	 * put them into the nested IFLA_VF_PORT structure */
+	LIST_FOREACH(p, &vd->profile_head, profile) {
+		if (p) {
+			vdp_print_profile(p);
+
+			vf_port  = nla_nest_start(nl_msg, IFLA_VF_PORT);
+
+			if (!vf_port)
+				goto err_exit;
+
+			if (nla_put(nl_msg, IFLA_PORT_INSTANCE_UUID, 16, p->instance) < 0)
+				goto err_exit;
+
+			if (nla_put_u32(nl_msg, IFLA_PORT_VF, PORT_SELF_VF) < 0)
+				goto err_exit;
+
+			if (p->response != VDP_RESPONSE_NO_RESPONSE) {
+				if (nla_put_u16(nl_msg, IFLA_PORT_RESPONSE,
+						p->response) < 0)
+					goto err_exit;
+			}
+
+			nla_nest_end(nl_msg, vf_port);
+		}
+	}
+
+	if (vf_ports)
+		nla_nest_end(nl_msg, vf_ports);
+
+	return nl_msg;
+
+err_exit:
+	nlmsg_free(nl_msg);
+
+	return NULL;
+}
+
+struct nl_msg *event_if_simpleResponse(uint32_t pid, uint32_t seq, int err)
+{
+	struct nl_msg *nl_msg = nlmsg_alloc();
+	struct nlmsgerr nlmsgerr;
+
+	memset(&nlmsgerr, 0x0, sizeof(nlmsgerr));
+
+	nlmsgerr.error = err;
+	LLDPAD_DBG("RESPONSE error code: %d\n",err);
+
+	if (nlmsg_put(nl_msg, pid, seq, NLMSG_ERROR, 0, 0) == NULL)
+		goto err_exit;
+
+	if (nlmsg_append(nl_msg, &nlmsgerr, sizeof(nlmsgerr), NLMSG_ALIGNTO) < 0)
+		goto err_exit;
+
+	return nl_msg;
+
+err_exit:
+	nlmsg_free(nl_msg);
+
+	return NULL;
+}
+
+static void event_iface_receive_user_space(int sock, void *eloop_ctx, void *sock_ctx)
+{
+	struct nlmsghdr *nlh, *nlh2;
+	struct nl_msg *nl_msg;
+	struct msghdr msg;
+	struct sockaddr_nl dest_addr;
+	struct iovec iov;
+	int result;
+	int err;
+	int ifindex = 0;
+	char *ifname = NULL;
+
+	nlh = (struct nlmsghdr *)calloc(1,
+					NLMSG_SPACE(MAX_PAYLOAD));
+	if (!nlh) {
+		LLDPAD_ERR("%s(%i): could not allocate nlh !\n", __func__,
+		       __LINE__);
+		return;
+	}
+	memset(nlh, 0, NLMSG_SPACE(MAX_PAYLOAD));
+
+	memset(&dest_addr, 0, sizeof(dest_addr));
+	iov.iov_base = (void *)nlh;
+	iov.iov_len = NLMSG_SPACE(MAX_PAYLOAD);
+	msg.msg_name = (void *)&dest_addr;
+	msg.msg_namelen = sizeof(dest_addr);
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = NULL;
+	msg.msg_controllen = 0;
+	msg.msg_flags = 0;
+
+	LLDPAD_DBG("Waiting for message\n");
+	result = recvmsg(sock, &msg, MSG_DONTWAIT);
+
+	LLDPAD_DBG("%s(%i): ", __func__, __LINE__);
+	LLDPAD_DBG("recvmsg received %d bytes\n", result);
+
+	if(result < 0) {
+		LLDPAD_ERR("Error receiving from netlink socket : %s\n", strerror(errno));
+	}
+
+	LLDPAD_DBG("dest_addr.nl_pid: %d\n", dest_addr.nl_pid);
+	LLDPAD_DBG("nlh.nl_pid: %d\n", nlh->nlmsg_pid);
+	LLDPAD_DBG("nlh_type: %d\n", nlh->nlmsg_type);
+	LLDPAD_DBG("nlh_seq: 0x%x\n", nlh->nlmsg_seq);
+	LLDPAD_DBG("nlh_len: 0x%x\n", nlh->nlmsg_len);
+
+	switch (nlh->nlmsg_type) {
+		case RTM_SETLINK:
+			LLDPAD_DBG("RTM_SETLINK\n");
+
+			err = event_if_parse_setmsg(nlh);
+
+			/* send simple response wether profile was accepted
+			 * or not */
+			nl_msg = event_if_simpleResponse(nlh->nlmsg_pid,
+							 nlh->nlmsg_seq,
+							 err);
+			nlh2 = nlmsg_hdr(nl_msg);
+			break;
+		case RTM_GETLINK:
+			LLDPAD_DBG("RTM_GETLINK\n");
+
+			err = event_if_parse_getmsg(nlh, &ifindex, ifname);
+			if (err) {
+				nl_msg = event_if_simpleResponse(nlh->nlmsg_pid,
+								 nlh->nlmsg_seq,
+								 err);
+				nlh2 = nlmsg_hdr(nl_msg);
+				break;
+			}
+			if (ifname) {
+				ifindex = if_nametoindex(ifname);
+				LLDPAD_DBG("%s: ifname %s (%d)\n", __func__,
+				       ifname, ifindex);
+			} else {
+				LLDPAD_DBG("%s: ifindex %i\n", __func__,
+				       ifindex);
+			}
+
+			nl_msg = event_if_constructResponse(nlh, ifindex);
+			if (!nl_msg) {
+				LLDPAD_ERR("%s: Unable to construct response\n",
+				       __func__);
+				goto out_err;
+			}
+
+			nlh2 = nlmsg_hdr(nl_msg);
+
+			LLDPAD_DBG("RESPONSE:\n");
+
+			event_if_parseResponseMsg(nlh2);
+
+			break;
+
+		default:
+			LLDPAD_ERR("%s: Unknown type: %d\n",
+				   __func__, nlh->nlmsg_type);
+			goto out_err2;
+	}
+
+	iov.iov_base = (void *)nlh2;
+	iov.iov_len = nlh2->nlmsg_len;
+
+	msg.msg_name = (void *)&dest_addr;
+	msg.msg_namelen = sizeof(dest_addr);
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+
+	result = sendmsg(sock, &msg, 0);
+
+	if (result < 0) {
+		LLDPAD_ERR("Error sending on netlink socket (%s) !\n", strerror(errno));
+	} else {
+		LLDPAD_DBG("Sent %d bytes !\n", result);
+	}
+
+out_err:
+	nlmsg_free(nl_msg);
+out_err2:
+	free(nlh);
+
+	return;
 }
 
 static void event_iface_receive(int sock, void *eloop_ctx, void *sock_ctx)
 {
 	struct nlmsghdr *nlh;
 	struct sockaddr_nl dest_addr;
-	char buf[MAX_MSG_SIZE];
+	char buf[MAX_PAYLOAD];
 	socklen_t fromlen = sizeof(dest_addr);
 	int result;
 	
@@ -242,16 +895,17 @@ static void event_iface_receive(int sock, void *eloop_ctx, void *sock_ctx)
 
 	if (result < 0) {
 		perror("recvfrom(Event interface)");
-		if ((errno == ENOBUFS) || (errno == EAGAIN))
-			eloop_register_timeout(INI_TIMER, 0, scan_port,
-					       NULL, NULL);
+		eloop_register_timeout(INI_TIMER, 0, scan_port, NULL, NULL);
 		return;
 	}
 
-	TRACE("PRINT BUF info.\n")
+	LLDPAD_DBG("%s:%s result from receive: %d.\n",
+		   __FILE__, __FUNCTION__, result);
 
-	device_name = NULL;
-	link_status = IF_OPER_UNKNOWN;
+	/* userspace messages handled in event_iface_receive_user_space() */
+	if (dest_addr.nl_pid != 0)
+		return;
+
 	nlh = (struct nlmsghdr *)buf;
 	event_if_process_recvmsg(nlh);
 }
@@ -259,7 +913,7 @@ static void event_iface_receive(int sock, void *eloop_ctx, void *sock_ctx)
 int event_iface_init()
 {
 	int fd;
-	int rcv_size = MAX_MSG_SIZE;
+	int rcv_size = MAX_PAYLOAD;
 	struct sockaddr_nl snl;
 
 	fd = socket(PF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
@@ -281,8 +935,38 @@ int event_iface_init()
 		return -EIO;
 	}
 
-	eloop_register_read_sock(fd, event_iface_receive, NULL, NULL);
-	return 0;
+	return eloop_register_read_sock(fd, event_iface_receive, NULL, NULL);
+}
+
+int event_iface_init_user_space()
+{
+	int fd;
+	int rcv_size = MAX_PAYLOAD;
+	struct sockaddr_nl snl;
+
+	fd = socket(PF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+
+	if (fd < 0)
+		return fd;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcv_size, sizeof(int)) < 0) {
+		close(fd);
+		return -EIO;
+	}
+
+	memset((void *)&snl, 0, sizeof(struct sockaddr_nl));
+	snl.nl_family = AF_NETLINK;
+	snl.nl_pid = getpid();  /* self pid */
+	snl.nl_groups = 0;
+
+	if (bind(fd, (struct sockaddr *)&snl, sizeof(struct sockaddr_nl)) < 0) {
+		close(fd);
+		LLDPAD_ERR("Error binding to netlink socket (%s) !\n", strerror(errno));
+		return -EIO;
+	}
+
+	return eloop_register_read_sock(fd, event_iface_receive_user_space,
+					NULL, NULL);
 }
 
 int event_iface_deinit()

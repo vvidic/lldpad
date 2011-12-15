@@ -20,21 +20,21 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdlib.h>
+#include <stdio.h>
 #include <ctype.h>
-#include "includes.h"
 #include "clif.h"
 #include "dcbtool.h"
 #include "lldp_dcbx_cmds.h"
 #include "clif_msgs.h"
 #include "dcb_types.h"
 #include "parse_cli.h"
-#include "common.h"
 #include "messages.h"
+#include "lldp_util.h"
 
 static char *print_status(cmd_status status);
 static char *get_pgdesc_args(int cmd);
@@ -79,6 +79,12 @@ static char *print_status(cmd_status status)
 		break;
 	case cmd_not_capable:
 		str = "Device not capable";
+		break;
+	case cmd_not_applicable:
+		str = "Command not applicable in IEEE-DCBX modes";
+		break;
+	case cmd_no_access:
+		str = "Access denied";
 		break;
 	default:
 		str = "Unknown status";
@@ -477,8 +483,6 @@ void print_dcb_cmd_response(char *buf, int status)
 		doff = DCB_PORT_OFF + plen;
 	}
 
-
-	printf("Version:   \t%d\n", version);
 	if (version != CLIF_MSG_VERSION) {
 		printf("Unsupported client interface message version: %d\n",
 			version);
@@ -522,6 +526,9 @@ void print_dcb_cmd_response(char *buf, int status)
 		switch (subtype) {
 		case APP_FCOE_STYPE:
 			printf("FCoE\n");
+			break;
+		case APP_ISCSI_STYPE:
+			printf("iSCSI\n");
 			break;
 		default:
 			printf("unknown\n");
@@ -622,7 +629,24 @@ void print_dcb_cmd_response(char *buf, int status)
 		      (*(buf+doff+DCB_STATE) == '1')?("on"):("off"));	
 		break;
 	case FEATURE_DCBX:
-		printf("DCBX Version:\t%c\n", *(buf+doff+DCBX_VERSION));
+		printf("DCBX Version:\t");
+		switch (*(buf+doff+DCBX_VERSION) ^ '0') {
+		case dcbx_subtype1:
+			printf("CIN\n");
+			break;
+		case dcbx_subtype2:
+			printf("CEE\n");
+			break;
+		case dcbx_force_subtype1:
+			printf("FORCED CIN\n");
+			break;
+		case dcbx_force_subtype2:
+			printf("FORCED CEE\n");
+			break;
+		default:
+			printf("unknown version\n");
+			break;
+		}
 		break;
 	case FEATURE_PG_DESC:
 		printf("PGID:       \t%d\n", *(buf+doff+PG_DESC_PGID) & 0x0f);
@@ -688,6 +712,11 @@ void print_dcb_cmd_response(char *buf, int status)
 	case FEATURE_APP:
 		switch (subtype) {
 		case APP_FCOE_STYPE:
+			printf("appcfg:     \t");
+			n = hex2int(buf+doff+APP_LEN);
+			printf("%*.*s\n", n, n, buf+doff+APP_DATA);
+			break;
+		case APP_ISCSI_STYPE:
 			printf("appcfg:     \t");
 			n = hex2int(buf+doff+APP_LEN);
 			printf("%*.*s\n", n, n, buf+doff+APP_DATA);

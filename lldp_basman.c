@@ -20,11 +20,12 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdlib.h>
+#include <errno.h>
 #include <net/if.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
@@ -85,15 +86,16 @@ static const struct lldp_mod_ops basman_ops =  {
 	.get_arg_handler	= basman_get_arg_handlers,
 };
 
-static struct basman_data *basman_data(const char *ifname)
+static struct basman_data *basman_data(const char *ifname, enum agent_type type)
 {
 	struct basman_user_data *bud;
 	struct basman_data *bd = NULL;
 
-	bud = find_module_user_data_by_if(ifname, &lldp_head, LLDP_MOD_BASIC);
+	bud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_BASIC);
 	if (bud) {
 		LIST_FOREACH(bd, &bud->head, entry) {
-			if (!strncmp(ifname, bd->ifname, IFNAMSIZ))
+			if (!strncmp(ifname, bd->ifname, IFNAMSIZ) &&
+			    (type == bd->agenttype))
 				return bd;
 		}
 	}
@@ -105,10 +107,9 @@ static struct basman_data *basman_data(const char *ifname)
  * @bd: the basman data struct
  *
  * Returns 0 for success or error code for failure
- *
- * Must be called w/ init_cfg() called already
  */
-static int basman_bld_portdesc_tlv(struct basman_data *bd)
+static int basman_bld_portdesc_tlv(struct basman_data *bd,
+				   struct lldp_agent *agent)
 {
 	int length;
 	int rc = 0;
@@ -118,14 +119,15 @@ static int basman_bld_portdesc_tlv(struct basman_data *bd)
 	/* free old if it's there */
 	FREE_UNPKD_TLV(bd, portdesc);
 
-	if (!is_tlv_txenabled(bd->ifname, PORT_DESCRIPTION_TLV)) {
+	if (!is_tlv_txenabled(bd->ifname, agent->type, PORT_DESCRIPTION_TLV)) {
 		LLDPAD_DBG("%s:%s:Port Description disabled\n",
 			__func__, bd->ifname);
 		goto out_err;
 	}
 
 	/* load from config */
-	if (!get_config_tlvinfo_str(bd->ifname, TLVID_NOUI(PORT_DESCRIPTION_TLV),
+	if (!get_config_tlvinfo_str(bd->ifname, agent->type,
+				    TLVID_NOUI(PORT_DESCRIPTION_TLV),
 				    desc, sizeof(desc))) {
 		/* use what's in the config */
 		length = strlen(desc);
@@ -162,10 +164,9 @@ out_err:
  * @bd: the basman data struct
  *
  * Returns 0 for success or error code for failure
- *
- * Must be called w/ init_cfg() called already
  */
-static int basman_bld_sysname_tlv(struct basman_data *bd)
+static int basman_bld_sysname_tlv(struct basman_data *bd,
+				  struct lldp_agent *agent)
 {
 	int length;
 	int rc = 0;
@@ -176,14 +177,15 @@ static int basman_bld_sysname_tlv(struct basman_data *bd)
 	/* free old if it's there */
 	FREE_UNPKD_TLV(bd, sysname);
 
-	if (!is_tlv_txenabled(bd->ifname, SYSTEM_NAME_TLV)) {
+	if (!is_tlv_txenabled(bd->ifname, agent->type, SYSTEM_NAME_TLV)) {
 		LLDPAD_DBG("%s:%s:System Name disabled\n",
 			__func__, bd->ifname);
 		goto out_err;
 	}
 
 	/* load from config */
-	if (!get_config_tlvinfo_str(bd->ifname, TLVID_NOUI(SYSTEM_NAME_TLV),
+	if (!get_config_tlvinfo_str(bd->ifname, agent->type,
+				    TLVID_NOUI(SYSTEM_NAME_TLV),
 				    desc, sizeof(desc))) {
 		/* use what's in the config */
 		length = strlen(desc);
@@ -226,11 +228,10 @@ out_err:
  *
  * Returns 0 for success or error code for failure
  *
- * Must be called w/ init_cfg() called already.
- *
  * net-snmp-utils: snmptest returns the following for sysDesr: `uname-a`
  */
-static int basman_bld_sysdesc_tlv(struct basman_data *bd)
+static int basman_bld_sysdesc_tlv(struct basman_data *bd,
+				  struct lldp_agent *agent)
 {
 	int length;
 	int rc = 0;
@@ -241,14 +242,16 @@ static int basman_bld_sysdesc_tlv(struct basman_data *bd)
 	/* free old if it's there */
 	FREE_UNPKD_TLV(bd, sysdesc);
 
-	if (!is_tlv_txenabled(bd->ifname, SYSTEM_DESCRIPTION_TLV)) {
+	if (!is_tlv_txenabled(bd->ifname, agent->type,
+			      SYSTEM_DESCRIPTION_TLV)) {
 		LLDPAD_DBG("%s:%s:System Description disabled\n",
 			__func__, bd->ifname);
 		goto out_err;
 	}
 
 	/* load from config */
-	if (!get_config_tlvinfo_str(bd->ifname, TLVID_NOUI(SYSTEM_DESCRIPTION_TLV),
+	if (!get_config_tlvinfo_str(bd->ifname, agent->type,
+				    TLVID_NOUI(SYSTEM_DESCRIPTION_TLV),
 				    desc, sizeof(desc))) {
 		/* use what's in the config */
 		length = strlen(desc);
@@ -293,35 +296,35 @@ out_err:
  *
  * Returns 0 for success or error code for failure
  *
- * Must be called w/ init_cfg() called already.
- *
  * TODO:
  *  - This is mandatory for LLDP-MED Class III
  *  - TPID to determine C-VLAN vs. S-VLAN ?
  */
-static int basman_bld_syscaps_tlv(struct basman_data *bd)
+static int basman_bld_syscaps_tlv(struct basman_data *bd,
+				  struct lldp_agent *agent)
 {
 	int rc = 0;
-	u32 syscaps;
+	u16 syscaps[2];
 	struct unpacked_tlv *tlv = NULL;
 
 	/* free old if it's there */
 	FREE_UNPKD_TLV(bd, syscaps);
 
-	if (!is_tlv_txenabled(bd->ifname, SYSTEM_CAPABILITIES_TLV)) {
+	if (!is_tlv_txenabled(bd->ifname, agent->type,
+			      SYSTEM_CAPABILITIES_TLV)) {
 		LLDPAD_DBG("%s:%s:System Capabilities disabled\n",
 			__func__, bd->ifname);
 		goto out_err;
 	}
 
 	/* load from config */
-	if (get_config_tlvinfo_bin(bd->ifname, TLVID_NOUI(SYSTEM_CAPABILITIES_TLV),
-			      (void *)&syscaps, sizeof(syscaps))) {
-		u16 *caps = (u16 *)&syscaps;
+	if (get_config_tlvinfo_bin(bd->ifname, agent->type,
+				   TLVID_NOUI(SYSTEM_CAPABILITIES_TLV),
+				   &syscaps, sizeof(syscaps))) {
 		LLDPAD_DBG("%s:%s:Build System Caps from scratch\n",
 			__func__, bd->ifname);
-		caps[0] = htons(get_caps(bd->ifname));
-		caps[1] = (is_active(bd->ifname)) ? caps[0] : 0;
+		syscaps[0] = htons(get_caps(bd->ifname));
+		syscaps[1] = (is_active(bd->ifname)) ? syscaps[0] : 0;
 	}
 
 	tlv = create_tlv();
@@ -350,11 +353,11 @@ out_err:
  *
  * Returns 0 for success or error code for failure
  *
- * Must be called w/ init_cfg() called already. Currently supports
- * only IPv4, IPv6, and MAC address types.
+ * Currently supports only IPv4, IPv6, and MAC address types.
  *
  */
-static int basman_get_manaddr_sub(struct basman_data *bd, u8 masub)
+static int basman_get_manaddr_sub(struct basman_data *bd,
+				  struct lldp_agent *agent, u8 masub)
 {
 	int domain;
 	int length = 0;
@@ -378,7 +381,7 @@ static int basman_get_manaddr_sub(struct basman_data *bd, u8 masub)
 	memset(&manaddr, 0, sizeof(manaddr));
 	m = &manaddr.m;
 	m->sub = masub;
- 	switch(m->sub) {
+	switch(m->sub) {
 	case MANADDR_IPV4:
 		field = "ipv4";
 		domain = AF_INET;
@@ -403,8 +406,9 @@ static int basman_get_manaddr_sub(struct basman_data *bd, u8 masub)
 
 	/* read from the config first */
 	if (get_config_tlvfield_str(bd->ifname,
+				    agent->type,
 				    TLVID_NOUI(MANAGEMENT_ADDRESS_TLV),
-				    field, (void *)maddr, sizeof(maddr))) {
+				    field, maddr, sizeof(maddr))) {
 		LLDPAD_DBG("%s:%s:failed to get %s from config\n",
 			__func__, bd->ifname, field);
 		goto out_bld;
@@ -428,8 +432,9 @@ out_bld:
 
 out_set:
 	set_config_tlvfield_str(bd->ifname,
+				agent->type,
 				TLVID_NOUI(MANAGEMENT_ADDRESS_TLV),
-				field, (void *)maddr, sizeof(maddr));
+				field, maddr, sizeof(maddr));
 
 	/* build ifnum and oid:
 	 *  mlen + msub + maddr  + ifsub + ifidx + oidlen + oid
@@ -477,7 +482,6 @@ out_err:
  *
  * Returns 0 for success or error code for failure
  *
- * Must be called w/ init_cfg() called already.
  * Use as many existing as possible
  * Preference is config > ipv6 > ipv4 > mac > default
  *
@@ -486,7 +490,8 @@ out_err:
  * TODO:
  *  - No support for OID yet
  */
-static int basman_bld_manaddr_tlv(struct basman_data *bd)
+static int basman_bld_manaddr_tlv(struct basman_data *bd,
+				  struct lldp_agent *agent)
 {
 	int i;
 	int rc = 0;
@@ -497,18 +502,19 @@ static int basman_bld_manaddr_tlv(struct basman_data *bd)
 	bd->macnt = 0;
 
 	/* ignore manaddr if it's not enabled for tx */
-	if (!is_tlv_txenabled(bd->ifname, MANAGEMENT_ADDRESS_TLV)) {
+	if (!is_tlv_txenabled(bd->ifname, agent->type,
+			      MANAGEMENT_ADDRESS_TLV)) {
 		LLDPAD_DBG("%s:%s:Management Address disabled\n",
 			__func__, bd->ifname);
 		goto out_err;
 	}
 
 	/* management addr preference: ipv4, ipv6, mac */
-	rc = basman_get_manaddr_sub(bd, MANADDR_IPV4);
+	rc = basman_get_manaddr_sub(bd, agent, MANADDR_IPV4);
 	if (rc) {
-		rc = basman_get_manaddr_sub(bd, MANADDR_IPV6);
+		rc = basman_get_manaddr_sub(bd, agent, MANADDR_IPV6);
 		if (rc)
-			basman_get_manaddr_sub(bd, MANADDR_ALL802);
+			basman_get_manaddr_sub(bd, agent, MANADDR_ALL802);
 	}
 out_err:
 	return rc;
@@ -530,7 +536,7 @@ static void basman_free_tlv(struct basman_data *bd)
 }
 
 /* build unpacked tlvs */
-static int basman_bld_tlv(struct basman_data *bd)
+static int basman_bld_tlv(struct basman_data *bd, struct lldp_agent *agent)
 {
 	int rc = EPERM;
 
@@ -539,30 +545,27 @@ static int basman_bld_tlv(struct basman_data *bd)
 		goto out_err;
 	}
 
-	if (!init_cfg())
-		goto out_err;
-
-	if (basman_bld_portdesc_tlv(bd)) {
+	if (basman_bld_portdesc_tlv(bd, agent)) {
 		LLDPAD_DBG("%s:%s:basman_bld_portdesc_tlv() failed\n",
 				__func__, bd->ifname);
 		goto out_err;
 	}
-	if (basman_bld_sysname_tlv(bd)) {
+	if (basman_bld_sysname_tlv(bd, agent)) {
 		LLDPAD_DBG("%s:%s:basman_bld_sysname_tlv() failed\n",
 				__func__, bd->ifname);
 		goto out_err;
 	}
-	if (basman_bld_sysdesc_tlv(bd)) {
+	if (basman_bld_sysdesc_tlv(bd, agent)) {
 		LLDPAD_DBG("%s:%s:basman_bld_sysdesc_tlv() failed\n",
 				__func__, bd->ifname);
 		goto out_err;
 	}
-	if (basman_bld_syscaps_tlv(bd)) {
+	if (basman_bld_syscaps_tlv(bd, agent)) {
 		LLDPAD_DBG("%s:%s:basman_bld_syscaps_tlv() failed\n",
 				__func__, bd->ifname);
 		goto out_err;
 	}
-	if (basman_bld_manaddr_tlv(bd)) {
+	if (basman_bld_manaddr_tlv(bd, agent)) {
 		LLDPAD_DBG("%s:%s:basman_bld_manaddr_tlv() failed\n",
 				__func__, bd->ifname);
 		goto out_err;
@@ -586,20 +589,20 @@ static void basman_free_data(struct basman_user_data *bud)
 	}
 }
 
-struct packed_tlv *basman_gettlv(struct port *port)
+struct packed_tlv *basman_gettlv(struct port *port, struct lldp_agent *agent)
 {
 	int i;
 	int size;
 	struct basman_data *bd;
 	struct packed_tlv *ptlv = NULL;
 
-	bd = basman_data(port->ifname);
+	bd = basman_data(port->ifname, agent->type);
 	if (!bd)
 		goto out_err;
 
 	/* free and rebuild the TLVs */
 	basman_free_tlv(bd);
-	if (basman_bld_tlv(bd)) {
+	if (basman_bld_tlv(bd, agent)) {
 		LLDPAD_DBG("%s:%s basman_bld_tlv failed\n",
 			__func__, port->ifname);
 		goto out_err;
@@ -643,11 +646,11 @@ out_err:
 	return NULL;
 }
 
-void basman_ifdown(char *ifname)
+void basman_ifdown(char *ifname, struct lldp_agent *agent)
 {
 	struct basman_data *bd;
 
-	bd = basman_data(ifname);
+	bd = basman_data(ifname, agent->type);
 	if (!bd)
 		goto out_err;
 
@@ -661,12 +664,12 @@ out_err:
 	return;
 }
 
-void basman_ifup(char *ifname)
+void basman_ifup(char *ifname, struct lldp_agent *agent)
 {
 	struct basman_data *bd;
 	struct basman_user_data *bud;
 
-	bd = basman_data(ifname);
+	bd = basman_data(ifname, agent->type);
 	if (bd) {
 		LLDPAD_DBG("%s:%s exists\n", __func__, ifname);
 		goto out_err;
@@ -681,13 +684,15 @@ void basman_ifup(char *ifname)
 	}
 	memset(bd, 0, sizeof(struct basman_data));
 	strncpy(bd->ifname, ifname, IFNAMSIZ);
-	if (basman_bld_tlv(bd)) {
+	bd->agenttype = agent->type;
+
+	if (basman_bld_tlv(bd, agent)) {
 		LLDPAD_DBG("%s:%s mand_bld_tlv failed\n", __func__, ifname);
 		free(bd);
 		goto out_err;
 	}
 
-	bud = find_module_user_data_by_if(ifname, &lldp_head, LLDP_MOD_BASIC);
+	bud = find_module_user_data_by_id(&lldp_head, LLDP_MOD_BASIC);
 	LIST_INSERT_HEAD(&bud->head, bd, entry);
 	LLDPAD_DBG("%s:port %s added\n", __func__, ifname);
 	return;

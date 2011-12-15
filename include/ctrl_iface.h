@@ -25,24 +25,22 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef CTRL_IFACE_H
 #define CTRL_IFACE_H
 
+#include <sys/socket.h>
+#include <sys/un.h>
+#include "lldp.h"
+#include "lldp_rtnl.h"
 #include "dcb_protocol.h"
-#include "sys/un.h"
 
 struct ctrl_dst;
 
 struct clif_data {
-	char iface[IFNAMSIZ+1];
-	char *ctrl_interface;
-	gid_t ctrl_interface_gid;
-	int ctrl_interface_gid_set;
 	int ctrl_sock;
 	struct ctrl_dst *ctrl_dst;
 };
@@ -51,36 +49,36 @@ int ctrl_iface_init(struct clif_data *clifd);
 int ctrl_iface_register(struct clif_data *clifd);
 void ctrl_iface_deinit(struct clif_data *clifd);
 void ctrl_iface_send(struct clif_data *clifd, int level, u32 moduleid,
-				char *buf, size_t len);
+		     char *buf, size_t len);
 
 int clif_iface_attach(struct clif_data *clifd,
-				struct sockaddr_un *from,
-				socklen_t fromlen,
-				char *ibuf, int ilen,
-				char *rbuf);
+		      struct sockaddr_un *from,
+		      socklen_t fromlen,
+		      char *ibuf, int ilen,
+		      char *rbuf, int rlen);
 int clif_iface_detach(struct clif_data *clifd,
-				struct sockaddr_un *from,
-				socklen_t fromlen,
-				char *ibuf, int ilen,
-				char *rbuf);
+		      struct sockaddr_un *from,
+		      socklen_t fromlen,
+		      char *ibuf, int ilen,
+		      char *rbuf, int rlen);
 int clif_iface_level(struct clif_data *clifd,
-				struct sockaddr_un *from,
-				socklen_t fromlen,
-				char *ibuf, int ilen,
-				char *rbuf);
+		     struct sockaddr_un *from,
+		     socklen_t fromlen,
+		     char *ibuf, int ilen,
+		     char *rbuf, int rlen);
 int clif_iface_ping(struct clif_data *clifd,
-				struct sockaddr_un *from,
-				socklen_t fromlen,
-				char *ibuf, int ilen,
-				char *rbuf);
+		    struct sockaddr_un *from,
+		    socklen_t fromlen,
+		    char *ibuf, int ilen,
+		    char *rbuf, int rlen);
 int clif_iface_cmd_unknown(struct clif_data *clifd,
-				struct sockaddr_un *from,
-				socklen_t fromlen,
-				char *ibuf, int ilen,
-				char *rbuf);
+			   struct sockaddr_un *from,
+			   socklen_t fromlen,
+			   char *ibuf, int ilen,
+			   char *rbuf, int rlen);
 int clif_iface_module(struct clif_data *clifd,
-				struct sockaddr_un *from,
-				socklen_t fromlen,
-				char *ibuf, int ilen,
-				char *rbuf);
+		      struct sockaddr_un *from,
+		      socklen_t fromlen,
+		      char *ibuf, int ilen,
+		      char *rbuf, int rlen);
 #endif /* CTRL_IFACE_H */

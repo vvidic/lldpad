@@ -20,8 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
@@ -29,11 +28,13 @@
 #define _LLDP_8023_H
 
 #include "lldp_mod.h"
+#include "lldp_tlv.h"
 
 #define LLDP_MOD_8023	OUI_IEEE_8023
 
 struct ieee8023_data {
 	char ifname[IFNAMSIZ];
+	enum agent_type agenttype;
 	struct unpacked_tlv *maccfg;
 	struct unpacked_tlv *powvmdi;
 	struct unpacked_tlv *linkagg;
@@ -47,8 +48,8 @@ struct ieee8023_user_data {
 
 struct lldp_module *ieee8023_register(void);
 void ieee8023_unregister(struct lldp_module *mod);
-struct packed_tlv *ieee8023_gettlv(struct port *port);
-void ieee8023_ifdown(char *);
-void ieee8023_ifup(char *);
+struct packed_tlv *ieee8023_gettlv(struct port *, struct lldp_agent *);
+void ieee8023_ifdown(char *, struct lldp_agent *);
+void ieee8023_ifup(char *, struct lldp_agent *);
 
 #endif /* _LLDP_8023_H */

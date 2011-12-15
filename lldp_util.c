@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2011 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -20,13 +20,14 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <ifaddrs.h>
 #include <netdb.h>
 #include <unistd.h>
@@ -34,20 +35,106 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <net/if_arp.h>
+#include <netlink/msg.h>
 #include <arpa/inet.h>
-#include <linux/if.h>
-#include <linux/if_bonding.h>
-#include <linux/if_bridge.h>
-#include <linux/if_vlan.h>
 #include <linux/wireless.h>
 #include <linux/sockios.h>
-#include <linux/ethtool.h>
 #include <dirent.h>
+#include "linux/if_bonding.h"
+#include "linux/if_bridge.h"
+#include "linux/ethtool.h"
+#include "linux/rtnetlink.h"
+#include "linux/if_vlan.h"
+#include "linux/if.h"
 #include "lldp.h"
 #include "lldp_util.h"
 #include "messages.h"
-#include "drv_cfg.h"
+#include "lldp_dcbx_nl.h"
 
+static int hex2num(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+static int hex2byte(const char *hex)
+{
+	int a, b;
+	a = hex2num(*hex++);
+	if (a < 0)
+		return -1;
+	b = hex2num(*hex++);
+	if (b < 0)
+		return -1;
+	return (a << 4) | b;
+}
+
+/**
+ * bin2hexstr - Convert binary data to ASCII string
+ * @hex: ASCII hex string (e.g., "01ab")
+ * @buf: Buffer for the binary data
+ * @len: Length of the text to convert in bytes (of buf); hex will be double
+ * this size
+ * Returns: 0 on success, -1 on failure (invalid hex string)
+ */
+#define BYTE2CHAR(b)	(((b) > 9) ? ((b) - 0xa + 'A') : ((b) + '0'))
+int bin2hexstr(const u8 *hex, size_t hexlen, char *buf, size_t buflen)
+{
+	u8 b;
+	size_t i, j;
+
+	for (i = j = 0; (i < hexlen) && (j < buflen); i++, j +=2) {
+		b = (hex[i] & 0xf0) >> 4;
+		buf[j] = BYTE2CHAR(b);
+		b = hex[i] & 0x0f;
+		buf[j + 1] = BYTE2CHAR(b);
+	}
+	return 0;
+}
+
+/**
+ * hexstr2bin - Convert ASCII hex string into binary data
+ * @hex: ASCII hex string (e.g., "01ab")
+ * @buf: Buffer for the binary data
+ * @len: Length of the text to convert in bytes (of buf); hex will be double
+ * this size
+ * Returns: 0 on success, -1 on failure (invalid hex string)
+ */
+int hexstr2bin(const char *hex, u8 *buf, size_t len)
+{
+	size_t i;
+	int a;
+	const char *ipos = hex;
+	u8 *opos = buf;
+
+	for (i = 0; i < len; i++) {
+		a = hex2byte(ipos);
+		if (a < 0) {
+			printf("ipos=%2.2s, a=%x\n", ipos, a);
+			return -1;
+		}
+		*opos++ = a;
+		ipos += 2;
+	}
+	return 0;
+}
+
+char *print_mac(char *mac, char *buf)
+{
+	sprintf(buf, "%02x:%02x:%02x:%02x:%02x:%02x",
+		(unsigned char)*(mac + 0),
+		(unsigned char)*(mac + 1),
+		(unsigned char)*(mac + 2),
+		(unsigned char)*(mac + 3),
+		(unsigned char)*(mac + 4),
+		(unsigned char)*(mac + 5));
+	return buf;
+}
 
 int is_valid_lldp_device(const char *device_name)
 {
@@ -56,6 +143,8 @@ int is_valid_lldp_device(const char *device_name)
 	if (is_vlan(device_name))
 		return 0;
 	if (is_bridge(device_name))
+		return 0;
+	if (is_macvtap(device_name))
 		return 0;
 	return 1;
 }
@@ -534,6 +623,92 @@ int is_wlan(const char *ifname)
 	return rc;
 }
 
+#define NLMSG_SIZE 1024
+
+static struct nla_policy ifla_info_policy[IFLA_INFO_MAX + 1] =
+{
+  [IFLA_INFO_KIND]       = { .type = NLA_STRING},
+  [IFLA_INFO_DATA]       = { .type = NLA_NESTED },
+};
+
+int is_macvtap(const char *ifname)
+{
+	int ret, s;
+	struct nlmsghdr *nlh;
+	struct ifinfomsg *ifinfo;
+	struct nlattr *tb[IFLA_MAX+1],
+		      *tb2[IFLA_INFO_MAX+1];
+
+	s = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
+
+	if (s < 0) {
+		goto out;
+	}
+
+	nlh = malloc(NLMSG_SIZE);
+	memset(nlh, 0, NLMSG_SIZE);
+
+	if (!nlh) {
+		goto out;
+	}
+
+	nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+        nlh->nlmsg_type = RTM_GETLINK;
+        nlh->nlmsg_flags = NLM_F_REQUEST;
+
+	ifinfo = NLMSG_DATA(nlh);
+	ifinfo->ifi_family = AF_UNSPEC;
+	ifinfo->ifi_index = get_ifidx(ifname);
+
+	ret = send(s, nlh, nlh->nlmsg_len, 0);
+
+	if (ret < 0) {
+		goto out_free;
+	}
+
+	memset(nlh, 0, NLMSG_SIZE);
+
+	do {
+		ret = recv(s, (void *) nlh, NLMSG_SIZE, MSG_DONTWAIT);
+	} while ((ret < 0) && errno == EINTR);
+
+	if (nlmsg_parse(nlh, sizeof(struct ifinfomsg),
+			(struct nlattr **)&tb, IFLA_MAX, NULL)) {
+		goto out_free;
+	}
+
+	if (tb[IFLA_IFNAME]) {
+		ifname = (char *)RTA_DATA(tb[IFLA_IFNAME]);
+	} else {
+		ifinfo = (struct ifinfomsg *)NLMSG_DATA(nlh);
+	}
+
+	if (tb[IFLA_LINKINFO]) {
+		if (nla_parse_nested(tb2, IFLA_INFO_MAX, tb[IFLA_LINKINFO],
+				     ifla_info_policy)) {
+			goto out_free;
+		}
+
+		if (tb2[IFLA_INFO_KIND]) {
+			char *kind = (char*)(RTA_DATA(tb2[IFLA_INFO_KIND]));
+			if (!(strcmp("macvtap", kind) && strcmp("macvlan", kind))) {
+				free(nlh);
+				close(s);
+				return true;
+			}
+		}
+
+	} else {
+		goto out_free;
+	}
+
+out_free:
+	free(nlh);
+out:
+	close(s);
+	return false;
+}
+
 int is_router(const char *ifname)
 {
 	int rc = 0;
@@ -983,7 +1158,7 @@ int str2mac(const char *src, u8 *mac, size_t size)
 
 	memset(mac, 0, size);
 	for (i = 0; i < 6; i++, mac++)
-		if (1 != sscanf(&src[i * 3], "%02X", mac))
+		if (1 != sscanf(&src[i * 3], "%02hhX", mac))
 			goto out_err;
 	rc = 0;
 out_err:
@@ -1051,4 +1226,75 @@ int check_link_status(const char *ifname)
 	close(fd);
 
 	return retval;
+}
+
+int get_arg_val_list(char *ibuf, int ilen, int *ioff,
+			    char **args, char **argvals)
+{
+	u8 arglen;
+	u16 argvalue_len;
+	int arglens[8];
+	int argvallens[8];
+	int numargs;
+	int i;
+
+	/* parse out args and argvals */
+	for (i = 0; ilen - *ioff > 2*sizeof(arglen); i++) {
+		hexstr2bin(ibuf+*ioff, &arglen, sizeof(arglen));
+		*ioff += 2*sizeof(arglen);
+		if (ilen - *ioff >= arglen) {
+			args[i] = ibuf+*ioff;
+			*ioff += arglen;
+			arglens[i] = arglen;
+
+			if (ilen - *ioff > 2*sizeof(argvalue_len)) {
+				hexstr2bin(ibuf+*ioff, (u8 *)&argvalue_len,
+					   sizeof(argvalue_len));
+				argvalue_len = ntohs(argvalue_len);
+				*ioff += 2*sizeof(argvalue_len);
+				if (ilen - *ioff >= argvalue_len) {
+					argvals[i] = ibuf+*ioff;
+					*ioff += argvalue_len;
+					argvallens[i] = argvalue_len;
+				}
+			} else {
+				return 0;
+			}
+		} else {
+			return 0;
+		}
+	}
+	numargs = i;
+	for (i = 0; i < numargs; i++) {
+		args[i][arglens[i]] = '\0';
+		argvals[i][argvallens[i]] = '\0';
+	}
+	return numargs;
+}
+
+int get_arg_list(char *ibuf, int ilen, int *ioff, char **args)
+{
+	u8 arglen;
+	int arglens[8];
+	int numargs;
+	int i;
+
+	/* parse out args */
+	for (i = 0; (ilen - *ioff > 2*sizeof(arglen)); i++) {
+		hexstr2bin(ibuf+(*ioff), &arglen, sizeof(arglen));
+		*ioff += 2*sizeof(arglen);
+		if (ilen - *ioff >= arglen) {
+			args[i] = ibuf+(*ioff);
+			*ioff += arglen;
+			arglens[i] = arglen;
+		} else {
+			return 0;
+		}
+	}
+	numargs = i;
+
+	for (i = 0; i < numargs; i++)
+		args[i][arglens[i]] = '\0';
+
+	return numargs;
 }

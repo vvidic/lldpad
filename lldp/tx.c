@@ -20,12 +20,12 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "dcb_osdep.h"
+#include <stdlib.h>
+#include <assert.h>
 #include "ports.h"
 #include "l2_packet.h"
 #include "states.h"
@@ -35,7 +35,7 @@
 #include "lldp_mod.h"
 #include "lldp_mand.h"
 
-bool mibConstrInfoLLDPDU(struct port *port)
+bool mibConstrInfoLLDPDU(struct port *port, struct lldp_agent *agent)
 {
 	struct l2_ethhdr eth;
 	u8  own_addr[ETH_ALEN];
@@ -43,23 +43,29 @@ bool mibConstrInfoLLDPDU(struct port *port)
 	u32 datasize = 0;
 	struct packed_tlv *ptlv =  NULL;
 	struct lldp_module *np;
+	char macstring[30];
 
-	if (port->tx.frameout) {
-		free(port->tx.frameout);
-		port->tx.frameout = NULL;
+	if (agent->tx.frameout) {
+		free(agent->tx.frameout);
+		agent->tx.frameout = NULL;
 	}
 
-	memcpy(eth.h_dest, multi_cast_source, ETH_ALEN);
+	mac2str(agent->mac_addr, macstring, 30);
+	LLDPAD_DBG("%s: port %s mac %s type %i.\n", __func__, port->ifname,
+		   macstring, agent->type);
+
+	memcpy(eth.h_dest, agent->mac_addr, ETH_ALEN);
 	l2_packet_get_own_src_addr(port->l2,(u8 *)&own_addr);
 	memcpy(eth.h_source, &own_addr, ETH_ALEN);
 	eth.h_proto = htons(ETH_P_LLDP);
-	port->tx.frameout =  (u8 *)malloc(ETH_FRAME_LEN);
-	if (port->tx.frameout == NULL) {
-		printf("InfoLLDPDU: Failed to malloc frame buffer \n");
+	agent->tx.frameout =  (u8 *)malloc(ETH_FRAME_LEN);
+	if (agent->tx.frameout == NULL) {
+		LLDPAD_DBG("InfoLLDPDU: Failed to malloc frame buffer \n");
 		return false;
 	}
-	memset(port->tx.frameout,0,ETH_FRAME_LEN);
-	memcpy(port->tx.frameout, (void *)&eth, sizeof(struct l2_ethhdr));
+
+	memset(agent->tx.frameout, 0, ETH_FRAME_LEN);
+	memcpy(agent->tx.frameout, (void *)&eth, sizeof(struct l2_ethhdr));
 	fb_offset += sizeof(struct l2_ethhdr);
 
 	/* Generic TLV Pack */
@@ -67,11 +73,11 @@ bool mibConstrInfoLLDPDU(struct port *port)
 		if (!np->ops || !np->ops->lldp_mod_gettlv)
 			continue;
 
-		ptlv = np->ops->lldp_mod_gettlv(port);
+		ptlv = np->ops->lldp_mod_gettlv(port, agent);
 		if (ptlv) {
 			if ((ptlv->size+fb_offset) > ETH_MAX_DATA_LEN)
 				goto error;
-			memcpy(port->tx.frameout+fb_offset,
+			memcpy(agent->tx.frameout+fb_offset,
 			       ptlv->tlv, ptlv->size);
 			datasize += ptlv->size;
 			fb_offset += ptlv->size;
@@ -83,45 +89,71 @@ bool mibConstrInfoLLDPDU(struct port *port)
 	ptlv = pack_end_tlv();
 	if (!ptlv || ((ptlv->size + fb_offset) > ETH_MAX_DATA_LEN))
 		goto error;
-	memcpy(port->tx.frameout + fb_offset, ptlv->tlv, ptlv->size);
+	memcpy(agent->tx.frameout + fb_offset, ptlv->tlv, ptlv->size);
 	datasize += ptlv->size;
 	fb_offset += ptlv->size;
 	ptlv =  free_pkd_tlv(ptlv);
 
 	if (datasize < ETH_MIN_DATA_LEN)
-		port->tx.sizeout = ETH_MIN_PKT_LEN;
+		agent->tx.sizeout = ETH_MIN_PKT_LEN;
 	else
-		port->tx.sizeout = fb_offset;
+		agent->tx.sizeout = fb_offset;
 
 	return true;
 
 error:
 	ptlv = free_pkd_tlv(ptlv);
-	if (port->tx.frameout)
-		free(port->tx.frameout);
-	port->tx.frameout = NULL;
-	printf("InfoLLDPDU: packed TLV too large for tx frame\n");
+	if (agent->tx.frameout)
+		free(agent->tx.frameout);
+	agent->tx.frameout = NULL;
+	LLDPAD_DBG("InfoLLDPDU: packed TLV too large for tx frame\n");
 	return false;
 }
 
-void txInitializeLLDP(struct port *port)
+void txInitializeLLDP(struct lldp_agent *agent)
 {
-	if (port->tx.frameout) {
-		free(port->tx.frameout);
-		port->tx.frameout = NULL;
+	if (agent->tx.frameout) {
+		free(agent->tx.frameout);
+		agent->tx.frameout = NULL;
 	}
-	port->tx.localChange = 1;
-	port->stats.statsFramesOutTotal = 0;
-	port->timers.reinitDelay   = REINIT_DELAY;
-	port->timers.msgTxHold     = DEFAULT_TX_HOLD;
-	port->timers.msgTxInterval = FASTSTART_TX_INTERVAL;
-	port->timers.txDelay       = FASTSTART_TX_DELAY;
-	port->timers.txShutdownWhile = 0;
-	port->timers.txDelayWhile = 0;
+
+	agent->tx.state  = TX_LLDP_INITIALIZE;
+	agent->rx.state = LLDP_WAIT_PORT_OPERATIONAL;
+
+	agent->tx.localChange = false;
+	agent->stats.statsFramesOutTotal = 0;
+	agent->timers.reinitDelay   = REINIT_DELAY;
+	agent->timers.msgTxHold     = DEFAULT_TX_HOLD;
+	agent->timers.msgTxInterval = DEFAULT_TX_INTERVAL;
+	agent->timers.msgFastTx     = FAST_TX_INTERVAL;
+
+	agent->tx.txTTL = 0;
+	agent->msap.length1 = 0;
+	agent->msap.msap1 = NULL;
+	agent->msap.length2 = 0;
+	agent->msap.msap2 = NULL;
+	agent->lldpdu = false;
+
 	return;
 }
 
-bool mibConstrShutdownLLDPDU(struct port *port)
+void txInitializeTimers(struct lldp_agent *agent)
+{
+	agent->timers.txTick = false;
+	agent->tx.txNow = false;
+	agent->tx.localChange = false;
+	agent->timers.txTTR = 0;
+	agent->tx.txFast = 0;
+	agent->timers.txShutdownWhile = 0;
+	agent->rx.newNeighbor = false;
+	agent->timers.txMaxCredit = TX_CREDIT_MAX;
+	agent->timers.txCredit = TX_CREDIT_MAX;
+	agent->timers.txFastInit = TX_FAST_INIT;
+	agent->timers.state = TX_TIMER_BEGIN;
+	return;
+}
+
+bool mibConstrShutdownLLDPDU(struct port *port, struct lldp_agent *agent)
 {
 	struct l2_ethhdr eth;
 	u8  own_addr[ETH_ALEN];
@@ -129,23 +161,27 @@ bool mibConstrShutdownLLDPDU(struct port *port)
 	u32 datasize = 0;
 	struct packed_tlv *ptlv =  NULL;
 	struct lldp_module *np;
+	char macstring[30];
 
-	if (port->tx.frameout) {
-		free(port->tx.frameout);
-		port->tx.frameout = NULL;
+	if (agent->tx.frameout) {
+		free(agent->tx.frameout);
+		agent->tx.frameout = NULL;
 	}
 
-	memcpy(eth.h_dest, multi_cast_source, ETH_ALEN);
+	mac2str(agent->mac_addr, macstring, 30);
+	LLDPAD_DBG("%s: mac %s.\n", __func__, macstring);
+
+	memcpy(eth.h_dest, agent->mac_addr, ETH_ALEN);
 	l2_packet_get_own_src_addr(port->l2,(u8 *)&own_addr);
 	memcpy(eth.h_source, &own_addr, ETH_ALEN);
 	eth.h_proto = htons(ETH_P_LLDP);
-	port->tx.frameout =  (u8 *)malloc(ETH_FRAME_LEN);
-	if (port->tx.frameout == NULL) {
-		printf("ShutdownLLDPDU: Failed to malloc frame buffer \n");
+	agent->tx.frameout =  (u8 *)malloc(ETH_FRAME_LEN);
+	if (agent->tx.frameout == NULL) {
+		LLDPAD_DBG("ShutdownLLDPDU: Failed to malloc frame buffer \n");
 		return false;
 	}
-	memset(port->tx.frameout,0,ETH_FRAME_LEN);
-	memcpy(port->tx.frameout, (void *)&eth, sizeof(struct l2_ethhdr));
+	memset(agent->tx.frameout,0,ETH_FRAME_LEN);
+	memcpy(agent->tx.frameout, (void *)&eth, sizeof(struct l2_ethhdr));
 	fb_offset += sizeof(struct l2_ethhdr);
 
 	np = find_module_by_id(&lldp_head, LLDP_MOD_MAND);
@@ -153,13 +189,13 @@ bool mibConstrShutdownLLDPDU(struct port *port)
 		goto error;
 	if (!np->ops || !np->ops->lldp_mod_gettlv)
 		goto error;
-	ptlv = np->ops->lldp_mod_gettlv(port);
+	ptlv = np->ops->lldp_mod_gettlv(port, agent);
 	if (ptlv) {
 		if ((ptlv->size + fb_offset) > ETH_MAX_DATA_LEN)
 			goto error;
 		/* set the TTL to be 0 TTL TLV */
 		memset(&ptlv->tlv[ptlv->size - 2], 0, 2);
-		memcpy(port->tx.frameout + fb_offset, ptlv->tlv, ptlv->size);
+		memcpy(agent->tx.frameout + fb_offset, ptlv->tlv, ptlv->size);
 		datasize += ptlv->size;
 		fb_offset += ptlv->size;
 		ptlv =  free_pkd_tlv(ptlv);
@@ -169,195 +205,291 @@ bool mibConstrShutdownLLDPDU(struct port *port)
 	ptlv = pack_end_tlv();
 	if (!ptlv || ((ptlv->size + fb_offset) > ETH_MAX_DATA_LEN))
 		goto error;
-	memcpy(port->tx.frameout + fb_offset, ptlv->tlv, ptlv->size);
+	memcpy(agent->tx.frameout + fb_offset, ptlv->tlv, ptlv->size);
 	datasize += ptlv->size;
 	fb_offset += ptlv->size;
 	ptlv = free_pkd_tlv(ptlv);
 
-	if (datasize < ETH_MIN_DATA_LEN) {
-		port->tx.sizeout = ETH_MIN_PKT_LEN;
-	} else {
-		port->tx.sizeout = fb_offset;
-	}
+	if (datasize < ETH_MIN_DATA_LEN)
+		agent->tx.sizeout = ETH_MIN_PKT_LEN;
+	else
+		agent->tx.sizeout = fb_offset;
 	return true;
 
 error:
 	ptlv = free_pkd_tlv(ptlv);
-	if (port->tx.frameout)
-		free(port->tx.frameout);
-	port->tx.frameout = NULL;
-	printf("InfoLLDPDU: packed TLV too large for tx frame\n");
+	if (agent->tx.frameout)
+		free(agent->tx.frameout);
+	agent->tx.frameout = NULL;
+	LLDPAD_DBG("InfoLLDPDU: packed TLV too large for tx frame\n");
 	return false;
 }
 
-u8 txFrame(struct port *port)
+u8 txFrame(struct port *port, struct lldp_agent *agent)
 {
-
 	int status = 0;
 
-	status = l2_packet_send(port->l2, (u8 *)&multi_cast_source,
-		htons(ETH_P_LLDP),port->tx.frameout,port->tx.sizeout);
-	port->stats.statsFramesOutTotal++;
-	if (port->stats.statsFramesOutTotal == FASTSTART_TX_COUNT) {
-		/* We sent the fast start transmissions */
-		port->timers.msgTxInterval = DEFAULT_TX_INTERVAL;
-		port->timers.txDelay       = DEFAULT_TX_DELAY;
-	}
+	status = l2_packet_send(port->l2, agent->mac_addr,
+		htons(ETH_P_LLDP), agent->tx.frameout, agent->tx.sizeout);
+
+	agent->stats.statsFramesOutTotal++;
 
 	return 0;
 }
 
 
-void run_tx_sm(struct port *port, bool update_timers)
+void run_tx_sm(struct port *port, struct lldp_agent *agent)
 {
-	if (update_timers)
-		update_tx_timers(port);
-
-	set_tx_state(port);
+	set_tx_state(port, agent);
 	do {
-		switch(port->tx.state) {
+		switch(agent->tx.state) {
 		case TX_LLDP_INITIALIZE:
-			txInitializeLLDP(port);
+			txInitializeLLDP(agent);
 			break;
 		case TX_IDLE:
-			process_tx_idle(port);
+			process_tx_idle(agent);
 			break;
 		case TX_SHUTDOWN_FRAME:
-			process_tx_shutdown_frame(port);
+			process_tx_shutdown_frame(port, agent);
 			break;
 		case TX_INFO_FRAME:
-			process_tx_info_frame(port);
+			process_tx_info_frame(port, agent);
 			break;
 		default:
-			printf("ERROR The TX State Machine is broken!\n");
-			log_message(MSG_ERR_TX_SM_INVALID, "%s", port->ifname);
+			LLDPAD_DBG("ERROR The TX State Machine is broken!\n");
 		}
-	} while (set_tx_state(port) == true);
+	} while (set_tx_state(port, agent) == true);
 
 	return;
 }
 
-bool set_tx_state(struct port *port)
+bool set_tx_state(struct port *port, struct lldp_agent *agent)
 {
 	if ((port->portEnabled == false) && (port->prevPortEnabled == true)) {
-		printf("set_tx_state: port was disabled\n");
-		tx_change_state(port, TX_LLDP_INITIALIZE);
+		LLDPAD_DBG("set_tx_state: port was disabled\n");
+		tx_change_state(port, agent, TX_LLDP_INITIALIZE);
 	}
 	port->prevPortEnabled = port->portEnabled;
 
-	switch (port->tx.state) {
+	switch (agent->tx.state) {
 	case TX_LLDP_INITIALIZE:
-		if (port->portEnabled && ((port->adminStatus == enabledRxTx) ||
-			(port->adminStatus == enabledTxOnly))) {
-			tx_change_state(port, TX_IDLE);
+		if (port->portEnabled && ((agent->adminStatus == enabledRxTx) ||
+			(agent->adminStatus == enabledTxOnly))) {
+			tx_change_state(port, agent, TX_IDLE);
 			return true;
 		}
 		return false;
 	case TX_IDLE:
-		if ((port->adminStatus == disabled) ||
-			(port->adminStatus == enabledRxOnly)) {
-			tx_change_state(port, TX_SHUTDOWN_FRAME);
+		if ((agent->adminStatus == disabled) ||
+			(agent->adminStatus == enabledRxOnly)) {
+			tx_change_state(port, agent, TX_SHUTDOWN_FRAME);
 			return true;
 		}
-		if ((port->timers.txDelayWhile == 0) &&
-			((port->timers.txTTR == 0) ||
-			(port->tx.localChange))) {
-			tx_change_state(port, TX_INFO_FRAME);
+		if ((agent->tx.txNow) && ((agent->timers.txCredit > 0))) {
+			tx_change_state(port, agent, TX_INFO_FRAME);
 			return true;
 		}
 		return false;
 	case TX_SHUTDOWN_FRAME:
-		if (port->timers.txShutdownWhile == 0) {
-			tx_change_state(port, TX_LLDP_INITIALIZE);
+		if (agent->timers.txShutdownWhile == 0) {
+			tx_change_state(port, agent, TX_LLDP_INITIALIZE);
 			return true;
 		}
 		return false;
 	case TX_INFO_FRAME:
-		tx_change_state(port, TX_IDLE);
+		tx_change_state(port, agent, TX_IDLE);
 		return true;
 	default:
-		printf("ERROR: The TX State Machine is broken!\n");
-		log_message(MSG_ERR_TX_SM_INVALID, "%s", port->ifname);
+		LLDPAD_DBG("ERROR: The TX State Machine is broken!\n");
 		return false;
 	}
 }
 
-void process_tx_idle(struct port *port)
+void process_tx_idle(struct lldp_agent *agent)
 {
+	u32 tmpTTL;
+
+	tmpTTL = DEFAULT_TX_INTERVAL * agent->timers.msgTxHold + 1;
+
+	if (tmpTTL < 65535)
+		agent->tx.txTTL = htons(65535);
+	else
+		agent->tx.txTTL = htons((u16)tmpTTL);
+
 	return;
 }
 
-void process_tx_shutdown_frame(struct port *port)
+void process_tx_shutdown_frame(struct port *port, struct lldp_agent *agent)
 {
-	if (port->timers.txShutdownWhile == 0) {
-		if (mibConstrShutdownLLDPDU(port)) {
-			txFrame(port);
-		}
-		port->timers.txShutdownWhile = port->timers.reinitDelay;
+	if (agent->timers.txShutdownWhile == 0) {
+		if (mibConstrShutdownLLDPDU(port, agent))
+			txFrame(port, agent);
+		agent->timers.txShutdownWhile = agent->timers.reinitDelay;
 	}
 	return;
 }
 
-void process_tx_info_frame(struct port *port)
+void process_tx_info_frame(struct port *port, struct lldp_agent *agent)
 {
-	if (port->tx.localChange)
-		mibConstrInfoLLDPDU(port);
+	mibConstrInfoLLDPDU(port, agent);
 
-	txFrame(port);
-	port->tx.localChange = false;
+	txFrame(port, agent);
+	if (agent->timers.txCredit > 0)
+		agent->timers.txCredit--;
+	agent->tx.txNow = false;
 	return;
 }
 
-void	update_tx_timers(struct port *port)
+void update_tx_timers(struct lldp_agent *agent)
 {
-	if (port->timers.txShutdownWhile)
-		port->timers.txShutdownWhile--;
+	if (agent->timers.txTTR)
+		agent->timers.txTTR--;
 
-	if (port->timers.txDelayWhile)
-		port->timers.txDelayWhile--;
-
-	if (port->timers.txTTR)
-		port->timers.txTTR--;
+	agent->timers.txTick = true;
 	return;
 }
 
-void tx_change_state(struct port *port, u8 newstate)
+void	tx_timer_change_state(struct lldp_agent *agent, u8 newstate)
 {
-	u32 tmpTTL = 0;
+	switch(newstate) {
+	case TX_TIMER_INITIALIZE:
+		break;
+	case TX_TIMER_IDLE:
+		break;
+	case TX_TIMER_EXPIRES:
+		break;
+	case TX_TICK:
+		break;
+	case SIGNAL_TX:
+		break;
+	case TX_FAST_START:
+		break;
+	default:
+		LLDPAD_DBG("ERROR: tx_timer_change_state:  default\n");
+	}
 
+	agent->timers.state = newstate;
+	return;
+}
+
+bool	set_tx_timers_state(struct port *port, struct lldp_agent *agent)
+{
+	if ((agent->timers.state == TX_TIMER_BEGIN) ||
+	    (port->portEnabled == false) || (agent->adminStatus == disabled) ||
+	    (agent->adminStatus == enabledRxOnly)) {
+		tx_timer_change_state(agent, TX_TIMER_INITIALIZE);
+	}
+
+	switch (agent->timers.state) {
+	case TX_TIMER_INITIALIZE:
+		if (port->portEnabled && ((agent->adminStatus == enabledRxTx) ||
+			(agent->adminStatus == enabledTxOnly))) {
+			tx_timer_change_state(agent, TX_TIMER_IDLE);
+			return true;
+		}
+		return false;
+	case TX_TIMER_IDLE:
+		if (agent->tx.localChange) {
+			tx_timer_change_state(agent, SIGNAL_TX);
+			return true;
+		}
+
+		if (agent->timers.txTTR == 0) {
+			tx_timer_change_state(agent, TX_TIMER_EXPIRES);
+			return true;
+		}
+
+		if (agent->rx.newNeighbor) {
+			tx_timer_change_state(agent, TX_FAST_START);
+			return true;
+		}
+
+		if (agent->timers.txTick) {
+			tx_timer_change_state(agent, TX_TICK);
+			return true;
+		}
+		return false;
+	case TX_TIMER_EXPIRES:
+		tx_timer_change_state(agent, SIGNAL_TX);
+		return true;
+	case SIGNAL_TX:
+	case TX_TICK:
+		tx_timer_change_state(agent, TX_TIMER_IDLE);
+		return true;
+	case TX_FAST_START:
+		tx_timer_change_state(agent, TX_TIMER_EXPIRES);
+		return true;
+	default:
+		LLDPAD_DBG("ERROR: The TX State Machine is broken!\n");
+		return false;
+	}
+}
+
+void	run_tx_timers_sm(struct port *port, struct lldp_agent *agent)
+{
+	set_tx_timers_state(port, agent);
+	do {
+		switch(agent->timers.state) {
+		case TX_TIMER_INITIALIZE:
+			txInitializeTimers(agent);
+			break;
+		case TX_TIMER_IDLE:
+			break;
+		case TX_TIMER_EXPIRES:
+			if (agent->tx.txFast)
+				agent->tx.txFast--;
+			break;
+		case TX_TICK:
+			agent->timers.txTick = false;
+			if (agent->timers.txCredit < agent->timers.txMaxCredit)
+				agent->timers.txCredit++;
+			break;
+		case SIGNAL_TX:
+			agent->tx.txNow = true;
+			agent->tx.localChange = false;
+			if (agent->tx.txFast)
+				agent->timers.txTTR = agent->timers.msgFastTx;
+			else
+				agent->timers.txTTR = agent->timers.msgTxInterval;
+			break;
+		case TX_FAST_START:
+			agent->rx.newNeighbor = false;
+			if (agent->tx.txFast == 0)
+				agent->tx.txFast = agent->timers.txFastInit;
+			break;
+		default:
+			LLDPAD_DBG("ERROR The TX Timer State Machine "
+				   "is broken!\n");
+		}
+	} while (set_tx_timers_state(port, agent) == true);
+
+	return;
+}
+
+void tx_change_state(struct port *port, struct lldp_agent *agent, u8 newstate)
+{
 	switch(newstate) {
 	case TX_LLDP_INITIALIZE:
-		if ((port->tx.state != TX_SHUTDOWN_FRAME) &&
+		if ((agent->tx.state != TX_SHUTDOWN_FRAME) &&
 			port->portEnabled) {
-			printf("tx_change_state: TX_LLDP_INITIALIZE \n");
 			assert(port->portEnabled);
 		}
 		break;
 	case TX_IDLE:
-		if (!(port->tx.state == TX_LLDP_INITIALIZE ||
-			port->tx.state == TX_INFO_FRAME)) {
-			assert(port->tx.state == TX_LLDP_INITIALIZE);
-			assert(port->tx.state == TX_INFO_FRAME);
+		if (!(agent->tx.state == TX_LLDP_INITIALIZE ||
+			agent->tx.state == TX_INFO_FRAME)) {
+			assert(agent->tx.state == TX_LLDP_INITIALIZE);
+			assert(agent->tx.state == TX_INFO_FRAME);
 		}
-		tmpTTL = DEFAULT_TX_INTERVAL * port->timers.msgTxHold;
-		if (tmpTTL > 65535) {
-			port->tx.txTTL = htons(65535);
-		} else {
-			port->tx.txTTL = htons((u16)tmpTTL);
-		}
-		tmpTTL = 0;
-		port->timers.txTTR = port->timers.msgTxInterval;
-		port->timers.txDelayWhile = port->timers.txDelay;
 		break;
 	case TX_SHUTDOWN_FRAME:
 	case TX_INFO_FRAME:
-		assert(port->tx.state == TX_IDLE);
+		assert(agent->tx.state == TX_IDLE);
 		break;
 	default:
-		printf("ERROR: tx_change_state:  default\n");
-		log_message(MSG_ERR_TX_SM_INVALID, "%s", port->ifname);
+		LLDPAD_DBG("ERROR: tx_change_state:  default\n");
 	}
 
-	port->tx.state = newstate;
+	agent->tx.state = newstate;
 	return;
 }

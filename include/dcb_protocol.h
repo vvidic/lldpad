@@ -20,13 +20,14 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef _DCB_PROTOCOL_H_
 #define _DCB_PROTOCOL_H_
+
+#include "lldp.h"
 #include "dcb_types.h"
 
 
@@ -58,14 +59,8 @@ typedef enum {
 #define DUP_DCBX_TLV_LLINK         0x0020
 #define TOO_MANY_NGHBRS            0x0040
 
-//#ifndef min /*todo: change to min()
-	#define MIN(x, y) ((x) < (y) ? x : y)
-//#endif
-
 #define INIT_DCB_OUI                    {0x00,0x1b,0x21}
 
-int add_adapter(char *device_name);
-int remove_adapter(char *device_name);
 int dcbx_add_adapter(char *device_name);
 int dcbx_remove_adapter(char *device_name);
 int dcbx_remove_all(void);
@@ -83,17 +78,11 @@ void remove_dcb_support(void);
 bool add_pg_defaults(void);
 bool add_pfc_defaults(void);
 bool add_app_defaults(u32 subtype);
-bool remove_pg_defaults(void);
-bool remove_pfc_defaults(void);
-bool remove_app_defaults(u32 subtype);
 void mark_pg_sent(char *device_name);
 void mark_pfc_sent(char *device_name);
 void mark_app_sent(char *device_name, u32 subtype);
 bool add_llink_defaults(u32 subtype);
-bool remove_llink_defaults(u32 subtype);
 void mark_llink_sent(char *device_name, u32 subtype);
-
-dcb_result test_device_dstore(char *device_name);
 
 dcb_result get_control(char *device_name,
 	control_protocol_attribs *control_data);
@@ -102,7 +91,8 @@ dcb_result get_peer_control(char *device_name,
 dcb_result put_peer_control(char *, control_protocol_attribs *);
 
 dcb_result get_pg(char *device_name, pg_attribs *pg_data);
-dcb_result put_pg(char *device_name, pg_attribs *pg_data);
+dcb_result put_pg(char *device_name, pg_attribs *pg_data,
+		  pfc_attribs *pfc_data);
 dcb_result put_peer_pg(char *,  pg_attribs *);
 dcb_result get_oper_pg(char *device_name, pg_attribs *pg_data);
 dcb_result get_peer_pg(char *device_name, pg_attribs *pg_data);

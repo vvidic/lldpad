@@ -20,17 +20,16 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
 #ifndef _TLV_DCBX_H_
 #define _TLV_DCBX_H_
 
-#include "lldp_dcbx.h"
-#include "dcb_types.h"
 #include "lldp.h"
+#include "dcb_types.h"
+#include "lldp_dcbx.h"
 
 /* Received TLV types */
 #define RCVD_LLDP_DCBX1_TLV         0x0200
@@ -183,12 +182,12 @@ struct dcbx1_app_info {
 };
 struct dcbx2_app_info {
 	struct dcbx_tlv_header hdr;
-	struct dcbx2_app_cfg data;
+	struct dcbx2_app_cfg data[];
 };
 #pragma pack() /*packoff*/
-#define DCBX1_APP_LEN                  DCBX1_APP_DATA_OFFSET
-#define DCBX2_APP_LEN                  sizeof(struct dcbx2_app_info)
-#define DCBX2_APP_SIZE                 sizeof(struct dcbx2_app_cfg)
+#define DCBX1_APP_LEN	DCBX1_APP_DATA_OFFSET
+#define DCBX2_APP_SIZE	sizeof(struct dcbx2_app_cfg)
+#define DCBX2_APP_LEN	(sizeof(struct dcbx2_app_info))
 
 #pragma pack(1) /*packon*/
 struct dcbx_llink_cfg {
@@ -228,8 +227,6 @@ struct dcb_control_info {
 #ifdef __cplusplus
 extern "C" {
 #endif
-void        process_dcbx_tlv(struct port *,struct unpacked_tlv *);
-
 struct unpacked_tlv *bld_dcbx1_tlv(struct dcbx_tlvs *dcbx);
 struct unpacked_tlv *bld_dcbx2_tlv(struct dcbx_tlvs *dcbx);
 struct unpacked_tlv *bld_dcbx_ctrl_tlv(struct dcbx_tlvs *dcbx);
@@ -244,13 +241,13 @@ struct unpacked_tlv *bld_dcbx2_app_tlv(struct dcbx_tlvs *, u32 sub_type,
 struct unpacked_tlv *bld_dcbx_llink_tlv(struct dcbx_tlvs *, u32 sub_type,
 					bool *success);
 
-bool   unpack_dcbx1_tlvs(struct port *, struct unpacked_tlv *);
-bool   unpack_dcbx2_tlvs(struct port *, struct unpacked_tlv *);
-bool   process_dcbx_ctrl_tlv(struct port *);
-bool   process_dcbx_pg_tlv(struct port *);
-bool   process_dcbx_pfc_tlv(struct port *);
-bool   process_dcbx_app_tlv(struct port *);
-bool   process_dcbx_llink_tlv(struct port *);
+bool   unpack_dcbx1_tlvs(struct port *, struct lldp_agent *, struct unpacked_tlv *);
+bool   unpack_dcbx2_tlvs(struct port *, struct lldp_agent *, struct unpacked_tlv *);
+bool   process_dcbx_ctrl_tlv(struct port *, struct lldp_agent *);
+bool   process_dcbx_pg_tlv(struct port *, struct lldp_agent *);
+bool   process_dcbx_pfc_tlv(struct port *, struct lldp_agent *);
+bool   process_dcbx_app_tlv(struct port *, struct lldp_agent *, int);
+bool   process_dcbx_llink_tlv(struct port *, struct lldp_agent *);
 
 #ifdef __cplusplus
 }

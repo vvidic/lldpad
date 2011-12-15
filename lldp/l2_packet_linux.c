@@ -20,26 +20,27 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include <syslog.h>
 #include <sys/ioctl.h>
+#include <unistd.h>
 #include <linux/if_packet.h>
 #include <linux/pkt_sched.h>
 #include <net/if.h>
-
-#include "common.h"
 #include "eloop.h"
 #include "ports.h"
 #include "messages.h"
 #include "l2_packet.h"
 #include "lldp_util.h"
 #include "dcb_types.h"
-#include "drv_cfg.h"
 #include "lldp/states.h"
+#include "lldp_dcbx_nl.h"
 
 static struct port *bond_porthead = NULL;
 
@@ -50,6 +51,7 @@ struct l2_packet_data {
 	u8 perm_mac_addr[ETH_ALEN];
 	u8 curr_mac_addr[ETH_ALEN];
 	u8 san_mac_addr[ETH_ALEN];
+	u8 remote_mac_addr[ETH_ALEN];
 	void (*rx_callback)(void *ctx, unsigned int ifindex,
 			    const u8 *buf, size_t len);
 	void *rx_callback_ctx;
@@ -60,7 +62,7 @@ struct l2_packet_data {
 int l2_packet_get_own_src_addr(struct l2_packet_data *l2, u8 *addr)
 {
 	if (is_san_mac(l2->san_mac_addr))
-		os_memcpy(addr, l2->san_mac_addr, ETH_ALEN);
+		memcpy(addr, l2->san_mac_addr, ETH_ALEN);
 	else {
 		/* get an appropriate src MAC to use if the port is
 	 	* part of a bond.
@@ -72,18 +74,33 @@ int l2_packet_get_own_src_addr(struct l2_packet_data *l2, u8 *addr)
 
 			bond_port = bond_port->next;
 		}
-		os_memcpy(addr, l2->curr_mac_addr, ETH_ALEN);
+		memcpy(addr, l2->curr_mac_addr, ETH_ALEN);
 	}
 
 	return 0;
 }
 
-int l2_packet_get_own_addr(struct l2_packet_data *l2, u8 *addr)
+
+/*
+ * Extracts the remote peer's MAC address from the rx frame  and
+ * puts it in the l2_packet_data
+ */
+void get_remote_peer_mac_addr(struct port *port, struct lldp_agent *agent)
 {
-	os_memcpy(addr, l2->perm_mac_addr, ETH_ALEN);
-	return 0;
+	int offset = ETH_ALEN;  /* points to remote MAC address in RX frame */
+	memcpy(port->l2->remote_mac_addr, &agent->rx.framein[offset], ETH_ALEN);
 }
 
+void l2_packet_get_remote_addr(struct l2_packet_data *l2, u8 *addr)
+{
+	memcpy(addr, l2->remote_mac_addr, ETH_ALEN);
+}
+
+int l2_packet_get_own_addr(struct l2_packet_data *l2, u8 *addr)
+{
+	memcpy(addr, l2->perm_mac_addr, ETH_ALEN);
+	return 0;
+}
 
 int l2_packet_send(struct l2_packet_data *l2, const u8 *dst_addr, u16 proto,
 		   const u8 *buf, size_t len)
@@ -98,12 +115,12 @@ int l2_packet_send(struct l2_packet_data *l2, const u8 *dst_addr, u16 proto,
 			perror("l2_packet_send - send");
 	} else {
 		struct sockaddr_ll ll;
-		os_memset(&ll, 0, sizeof(ll));
+		memset(&ll, 0, sizeof(ll));
 		ll.sll_family = AF_PACKET;
 		ll.sll_ifindex = l2->ifindex;
 		ll.sll_protocol = htons(proto);
 		ll.sll_halen = ETH_ALEN;
-		os_memcpy(ll.sll_addr, dst_addr, ETH_ALEN);
+		memcpy(ll.sll_addr, dst_addr, ETH_ALEN);
 		ret = sendto(l2->fd, buf, len, 0, (struct sockaddr *) &ll,
 			     sizeof(ll));
 		if (ret < 0)
@@ -121,13 +138,13 @@ static void l2_packet_receive(int sock, void *eloop_ctx, void *sock_ctx)
 	struct sockaddr_ll ll;
 	socklen_t fromlen;
 
-	os_memset(&ll, 0, sizeof(ll));
+	memset(&ll, 0, sizeof(ll));
 	fromlen = sizeof(ll);
 	res = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *) &ll,
 		       &fromlen);
 
 	if (res < 0) {
-		printf("receive ERROR = %d\n", res);
+		LLDPAD_INFO("receive ERROR = %d\n", res);
 		perror("l2_packet_receive - recvfrom");
 		return;
 	}
@@ -146,10 +163,11 @@ struct l2_packet_data * l2_packet_init(
 	struct ifreq ifr;
 	struct sockaddr_ll ll;
 
-	l2 = os_zalloc(sizeof(struct l2_packet_data));
+	l2 = malloc(sizeof(struct l2_packet_data));
 	if (l2 == NULL)
 		return NULL;
-	os_strncpy(l2->ifname, ifname, sizeof(l2->ifname));
+	memset(l2, 0, sizeof(*l2));
+	strncpy(l2->ifname, ifname, sizeof(l2->ifname));
 	l2->rx_callback = rx_callback;
 	l2->rx_callback_ctx = rx_callback_ctx;
 	l2->l2_hdr = l2_hdr;
@@ -159,27 +177,27 @@ struct l2_packet_data * l2_packet_init(
 
 	if (l2->fd < 0) {
 		perror("socket(PF_PACKET)");
-		os_free(l2);
+		free(l2);
 		return NULL;
 	}
 
-	os_strncpy(ifr.ifr_name, l2->ifname, sizeof(ifr.ifr_name));
+	strncpy(ifr.ifr_name, l2->ifname, sizeof(ifr.ifr_name));
 	if (ioctl(l2->fd, SIOCGIFINDEX, &ifr) < 0) {
 		perror("ioctl[SIOCGIFINDEX]");
 		close(l2->fd);
-		os_free(l2);
+		free(l2);
 		return NULL;
 	}
 	l2->ifindex = ifr.ifr_ifindex;
 
-	os_memset(&ll, 0, sizeof(ll));
+	memset(&ll, 0, sizeof(ll));
 	ll.sll_family = PF_PACKET;
 	ll.sll_ifindex = ifr.ifr_ifindex;
 	ll.sll_protocol = htons(protocol);
 	if (bind(l2->fd, (struct sockaddr *) &ll, sizeof(ll)) < 0) {
 		perror("bind[PF_PACKET]");
 		close(l2->fd);
-		os_free(l2);
+		free(l2);
 		return NULL;
 	}
 
@@ -187,13 +205,13 @@ struct l2_packet_data * l2_packet_init(
 	if (ioctl(l2->fd, SIOCGIFHWADDR, &ifr) < 0) {
 		perror("ioctl[SIOCGIFHWADDR]");
 		close(l2->fd);
-		os_free(l2);
+		free(l2);
 		return NULL;
 	}
-	os_memcpy(l2->curr_mac_addr, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
+	memcpy(l2->curr_mac_addr, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
 
 	if (get_perm_hwaddr(ifname, l2->perm_mac_addr, l2->san_mac_addr) != 0) {
-		os_memcpy(l2->perm_mac_addr, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
+		memcpy(l2->perm_mac_addr, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
 		memset(l2->san_mac_addr, 0xff, ETH_ALEN);
 	}
 
@@ -201,22 +219,33 @@ struct l2_packet_data * l2_packet_init(
 	memset(&mr, 0, sizeof(mr));
 	mr.mr_ifindex = l2->ifindex;
 	mr.mr_alen = ETH_ALEN;
-	memcpy(mr.mr_address, multi_cast_source, ETH_ALEN);
+	memcpy(mr.mr_address, &nearest_bridge, ETH_ALEN);
 	mr.mr_type = PACKET_MR_MULTICAST;
 	if (setsockopt(l2->fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr,
 		sizeof(mr)) < 0) {
-		perror("setsockopt");
+		perror("setsockopt nearest_bridge");
 		close(l2->fd);
-		os_free(l2);
+		free(l2);
 		return NULL;
 	}
+
+	memcpy(mr.mr_address, &nearest_customer_bridge, ETH_ALEN);
+	if (setsockopt(l2->fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr,
+		       sizeof(mr)) < 0)
+		perror("setsockopt nearest_customer_bridge");
+
+	memcpy(mr.mr_address, &nearest_nontpmr_bridge, ETH_ALEN);
+	if (setsockopt(l2->fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr,
+		       sizeof(mr)) < 0)
+		perror("setsockopt nearest_customer_bridge");
+
 	int option = 1;
 	int option_size = sizeof(option);
 	if (setsockopt(l2->fd, SOL_PACKET, PACKET_ORIGDEV,
 		&option, option_size) < 0) {
 		perror("setsockopt SOL_PACKET");
 		close(l2->fd);
-		os_free(l2);
+		free(l2);
 		return NULL;
 	}
 
@@ -225,7 +254,7 @@ struct l2_packet_data * l2_packet_init(
 		sizeof(option_size)) < 0) {
 		perror("setsockopt SOL_PRIORITY");
 		close(l2->fd);
-		os_free(l2);
+		free(l2);
 		return NULL;
 	}
 
@@ -248,7 +277,7 @@ void l2_packet_deinit(struct l2_packet_data *l2)
 		close(l2->fd);
 	}
 		
-	os_free(l2);
+	free(l2);
 }
 
 void l2_packet_get_port_state(struct l2_packet_data *l2, u8  *portEnabled)
@@ -262,8 +291,8 @@ void l2_packet_get_port_state(struct l2_packet_data *l2, u8  *portEnabled)
 		perror("socket");
 		return;
 	}
-	os_memset(&ifr, 0, sizeof(ifr));
-	os_strncpy(ifr.ifr_name, l2->ifname, sizeof(ifr.ifr_name));
+	memset(&ifr, 0, sizeof(ifr));
+	strncpy(ifr.ifr_name, l2->ifname, sizeof(ifr.ifr_name));
 
 	if (ioctl(s, SIOCGIFFLAGS, &ifr) < 0) {
 		perror("ioctl[SIOCGIFFLAGS]");
@@ -278,7 +307,7 @@ void l2_packet_get_port_state(struct l2_packet_data *l2, u8  *portEnabled)
 }
 
 
-int add_bond_port(const char *ifname)
+struct port *add_bond_port(const char *ifname)
 {
 	struct port *bond_newport;
 
@@ -286,14 +315,14 @@ int add_bond_port(const char *ifname)
 	while (bond_newport != NULL) {
 		if(!strncmp(ifname, bond_newport->ifname,
 			MAX_DEVICE_NAME_LEN))
-			return 0;
+			return bond_newport;
 		bond_newport = bond_newport->next;
 	}
 
 	bond_newport  = (struct port *)malloc(sizeof(struct port));
 	if (bond_newport == NULL) {
 		syslog(LOG_ERR, "failed to malloc bond port %s", ifname);
-		return -1;
+		return NULL;
 	}
 	memset(bond_newport,0,sizeof(struct port));	
 	bond_newport->next = NULL;
@@ -316,7 +345,7 @@ int add_bond_port(const char *ifname)
 		bond_newport->next = bond_porthead;
 	bond_porthead = bond_newport;
 
-	return 0;
+	return bond_newport;
 
 fail2:
 	free(bond_newport->ifname);
@@ -324,7 +353,7 @@ fail2:
 fail1:
 	free(bond_newport);
 	bond_newport = NULL;
-	return -1;
+	return NULL;
 }
 
 
@@ -350,7 +379,7 @@ int remove_bond_port(const char *ifname)
 
 	while (bond_port != NULL) {
 		if (!strncmp(ifname, bond_port->ifname, MAX_DEVICE_NAME_LEN)) {
-			printf("In remove_bond_port: Found bond port  %s\n",
+			LLDPAD_DBG("In remove_bond_port: Found bond port  %s\n",
 				bond_port->ifname);
 			break;
 		}

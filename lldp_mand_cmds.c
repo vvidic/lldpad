@@ -20,14 +20,12 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
-#include "includes.h"
-#include "common.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <syslog.h>
 #include <sys/un.h>
 #include <sys/stat.h>
@@ -41,17 +39,25 @@
 #include "config.h"
 #include "clif_msgs.h"
 #include "lldp/states.h"
+#include "lldp_util.h"
+#include "messages.h"
 
-static int get_arg_adminstatus(struct cmd *, char *, char *, char *);
-static int set_arg_adminstatus(struct cmd *, char *, char *, char *);
-static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *);
-static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *);
-static int handle_get_arg(struct cmd *, char *, char *, char *);
-static int handle_set_arg(struct cmd *, char *, char *, char *);
+static int get_arg_adminstatus(struct cmd *, char *, char *, char *, int);
+static int set_arg_adminstatus(struct cmd *, char *, char *, char *, int);
+static int test_arg_adminstatus(struct cmd *, char *, char *, char *, int);
+static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int set_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
+static int handle_get_arg(struct cmd *, char *, char *, char *, int);
+static int handle_set_arg(struct cmd *, char *, char *, char *, int);
+static int handle_test_arg(struct cmd *, char *, char *, char *, int);
 
 static struct arg_handlers arg_handlers[] = {
-	{ ARG_ADMINSTATUS, get_arg_adminstatus, set_arg_adminstatus },
-	{ ARG_TLVTXENABLE, get_arg_tlvtxenable, set_arg_tlvtxenable },
+	{ ARG_ADMINSTATUS, LLDP_ARG,
+		get_arg_adminstatus, set_arg_adminstatus,
+		test_arg_adminstatus },
+	{ ARG_TLVTXENABLE, TLV_ARG,
+		get_arg_tlvtxenable, set_arg_tlvtxenable, set_arg_tlvtxenable },
+		/* test same as set */
 	{ NULL }
 };
 
@@ -60,7 +66,9 @@ struct arg_handlers *mand_get_arg_handlers()
 	return &arg_handlers[0];
 }
 
-int get_arg_adminstatus(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+
+int get_arg_adminstatus(struct cmd *cmd, char *arg, char *argvalue,
+			char *obuf, int obuf_len)
 {
 	int value;
 	char *s;
@@ -69,9 +77,9 @@ int get_arg_adminstatus(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
 		return cmd_bad_params;
 
 	if (cmd->tlvid != INVALID_TLVID)
-    		return cmd_bad_params;
+		return cmd_bad_params;
 
-	if (get_config_setting(cmd->ifname, arg, (void *)&value,
+	if (get_config_setting(cmd->ifname, cmd->type, arg, &value,
 				CONFIG_TYPE_INT))
 		value = disabled;
 
@@ -93,12 +101,13 @@ int get_arg_adminstatus(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
 		return cmd_invalid;
 	}
 	
-	sprintf(obuf, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
+	snprintf(obuf, obuf_len, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
 		(unsigned int)strlen(s), s);
 	return cmd_success;
 }
 
-int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			char *obuf, int obuf_len)
 {
 	int value;
 	char *s;
@@ -124,20 +133,53 @@ int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
 	else
 		s = VAL_NO;
 	
-	sprintf(obuf, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
+	snprintf(obuf, obuf_len, "%02x%s%04x%s", (unsigned int)strlen(arg), arg,
 		(unsigned int)strlen(s), s);
 
 	return cmd_success;
 }
 
-int handle_get_arg(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+int handle_get_args(struct cmd *cmd, char *arg, char *argvalue,
+		   char *obuf, int obuf_len)
 {
 	struct lldp_module *np;
 	struct arg_handlers *ah;
-	int rval = cmd_invalid;
+	int rval;
+	char *nbuf;
+	int nbuf_len;
 
-	if (!init_cfg())
-		return rval;
+	nbuf = obuf;
+	nbuf_len = obuf_len;
+
+	LIST_FOREACH(np, &lldp_head, lldp) {
+		if (!np->ops->get_arg_handler)
+			continue;
+		if (!(ah = np->ops->get_arg_handler()))
+			continue;
+		while (ah->arg) {
+			if (ah->handle_get && (ah->arg_class == TLV_ARG)) {
+				rval = ah->handle_get(cmd, ah->arg, argvalue,
+						      nbuf, nbuf_len);
+
+				if (rval != cmd_success &&
+				    rval != cmd_not_applicable)
+					return rval;
+				
+				nbuf_len -= strlen(nbuf);
+				nbuf = nbuf + strlen(nbuf);
+			}
+			ah++;
+		}
+	}
+	return cmd_success;
+}
+
+int handle_get_arg(struct cmd *cmd, char *arg, char *argvalue,
+		   char *obuf, int obuf_len)
+{
+	struct lldp_module *np;
+	struct arg_handlers *ah;
+	int rval, status = cmd_not_applicable;
 
 	LIST_FOREACH(np, &lldp_head, lldp) {
 		if (!np->ops->get_arg_handler)
@@ -147,21 +189,25 @@ int handle_get_arg(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
 		while (ah->arg) {
 			if (!strcasecmp(ah->arg, arg) && ah->handle_get) {
 				rval = ah->handle_get(cmd, ah->arg, argvalue,
-						      obuf);
-				if (rval != cmd_not_applicable)
+						      obuf, obuf_len);
+
+				if (rval != cmd_success &&
+				    rval != cmd_not_applicable)
 					return rval;
-				else
-					break;
+				else if (rval == cmd_success)
+					status = rval;
+				break;
 			}
 			ah++;
 		}
 	}
-	return rval;
+	return status;
 }
 
-int set_arg_adminstatus(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+int _set_arg_adminstatus(struct cmd *cmd, char *arg, char *argvalue,
+			 char *obuf, int obuf_len, bool test)
 {
-	long value;
+	int value;
 
 	if (cmd->cmd != cmd_set_lldp || cmd->tlvid != INVALID_TLVID)
 		return cmd_bad_params;
@@ -177,20 +223,34 @@ int set_arg_adminstatus(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
 	else
 		return cmd_invalid;  /* ignore invalid value */
 
-	if (!init_cfg())
+	if (test)
+		return cmd_success;
+
+	if (set_config_setting(cmd->ifname, cmd->type, arg, &value,
+			       CONFIG_TYPE_INT))
 		return cmd_failed;
 
-	if (set_config_setting(cmd->ifname, arg, (void *)&value,
-			       CONFIG_TYPE_INT)) {
-		return cmd_failed;
-	}
+	set_lldp_agent_admin(cmd->ifname, cmd->type, value);
 
-	set_lldp_port_admin(cmd->ifname, value);
+	sprintf(obuf + strlen(obuf), "adminStatus = %s\n", argvalue);
 
 	return cmd_success;
 }
 
-int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+int test_arg_adminstatus(struct cmd *cmd, char *arg, char *argvalue,
+			 char *obuf, int obuf_len)
+{
+	return _set_arg_adminstatus(cmd, arg, argvalue, obuf, obuf_len, true);
+}
+
+int set_arg_adminstatus(struct cmd *cmd, char *arg, char *argvalue,
+			char *obuf, int obuf_len)
+{
+	return _set_arg_adminstatus(cmd, arg, argvalue, obuf, obuf_len, false);
+}
+
+int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
+			char *obuf, int obuf_len)
 {
 	if (cmd->cmd != cmd_settlv)
 		return cmd_bad_params;
@@ -210,14 +270,42 @@ int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
 	}
 }
 
-int handle_set_arg(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
+int handle_test_arg(struct cmd *cmd, char *arg, char *argvalue,
+		    char *obuf, int obuf_len)
 {
 	struct lldp_module *np;
 	struct arg_handlers *ah;
-	int rval = cmd_success;
+	int rval, status = cmd_not_applicable;
 
-	if (!init_cfg())
-		return cmd_failed;
+	LIST_FOREACH(np, &lldp_head, lldp) {
+		if (!np->ops->get_arg_handler)
+			continue;
+		if (!(ah = np->ops->get_arg_handler()))
+			continue;
+		while (ah->arg) {
+			if (!strcasecmp(ah->arg, arg) && ah->handle_test) {
+				rval = ah->handle_test(cmd, ah->arg, argvalue,
+						      obuf, obuf_len);
+				if (rval != cmd_not_applicable &&
+				    rval != cmd_success)
+					return rval;
+				else if (rval == cmd_success)
+					status = rval;
+				break;
+			}
+			ah++;
+		}
+	}
+
+	return status;
+}
+
+int handle_set_arg(struct cmd *cmd, char *arg, char *argvalue,
+		   char *obuf, int obuf_len)
+{
+	struct lldp_module *np;
+	struct arg_handlers *ah;
+	int rval, status = cmd_not_applicable;
 
 	LIST_FOREACH(np, &lldp_head, lldp) {
 		if (!np->ops->get_arg_handler)
@@ -227,22 +315,23 @@ int handle_set_arg(struct cmd *cmd, char *arg, char *argvalue, char *obuf)
 		while (ah->arg) {
 			if (!strcasecmp(ah->arg, arg) && ah->handle_set) {
 				rval = ah->handle_set(cmd, ah->arg, argvalue,
-						      obuf);
+						      obuf, obuf_len);
 				if (rval != cmd_not_applicable &&
 				    rval != cmd_success)
 					return rval;
-				else
-					break;
+				else if (rval == cmd_success)
+					status = rval;
+				break;
 			}
 			ah++;
 		}
 	}
 
-	return cmd_success;
+	return status;
 }
 
 
-int get_tlvs(struct cmd *cmd, char *rbuf)
+int get_tlvs(struct cmd *cmd, char *rbuf, int rlen)
 {
 	u8 tlvs[2048];
 	int size = 0;
@@ -251,13 +340,16 @@ int get_tlvs(struct cmd *cmd, char *rbuf)
 	int off = 0;
 	int moff = 0;
 	u16 type, len;
+	int res;
 
 	if (cmd->ops & op_local) {
-		if (get_local_tlvs(cmd->ifname, &tlvs[0], &size))
-			return cmd_failed;
+		res = get_local_tlvs(cmd->ifname, cmd->type, &tlvs[0], &size);
+		if (res)
+			return res;
 	} else if (cmd->ops & op_neighbor) {
-		if (get_neighbor_tlvs(cmd->ifname, &tlvs[0], &size))
-			return cmd_failed;
+		res = get_neighbor_tlvs(cmd->ifname, cmd->type, &tlvs[0], &size);
+		if (res)
+			return res;
 	} else
 		return cmd_failed;
 
@@ -287,32 +379,40 @@ int get_tlvs(struct cmd *cmd, char *rbuf)
 	}
 
 	for (i = 0; i < size; i++) {
-		sprintf(rbuf + 2*i, "%02x", tlvs[i]);
+		snprintf(rbuf + 2*i, rlen - strlen(rbuf), "%02x", tlvs[i]);
 	}
+
 	return cmd_success;
 }
 
-int get_port_stats(struct cmd *cmd, char *rbuf)
+int get_agent_stats(struct cmd *cmd, char *rbuf, int rlen)
 {
 	int offset=0;
-	struct portstats stats;
+	struct agentstats stats;
 
-	if (get_lldp_port_statistics(cmd->ifname, &stats))
+	if (get_lldp_agent_statistics(cmd->ifname, &stats, cmd->type))
 		return cmd_device_not_found;
 
-	sprintf(rbuf+offset, "%08x", stats.statsFramesOutTotal);
+	snprintf(rbuf+offset, rlen - strlen(rbuf),
+		"%08x", stats.statsFramesOutTotal);
 	offset+=8;
-	sprintf(rbuf+offset, "%08x", stats.statsFramesDiscardedTotal);
+	snprintf(rbuf+offset, rlen - strlen(rbuf),
+		"%08x", stats.statsFramesDiscardedTotal);
 	offset+=8;
-	sprintf(rbuf+offset, "%08x", stats.statsFramesInErrorsTotal);
+	snprintf(rbuf+offset, rlen - strlen(rbuf),
+		"%08x", stats.statsFramesInErrorsTotal);
 	offset+=8;
-	sprintf(rbuf+offset, "%08x", stats.statsFramesInTotal);
+	snprintf(rbuf+offset, rlen - strlen(rbuf),
+		"%08x", stats.statsFramesInTotal);
 	offset+=8;
-	sprintf(rbuf+offset, "%08x", stats.statsTLVsDiscardedTotal);
+	snprintf(rbuf+offset, rlen - strlen(rbuf),
+		"%08x", stats.statsTLVsDiscardedTotal);
 	offset+=8;
-	sprintf(rbuf+offset, "%08x", stats.statsTLVsUnrecognizedTotal);
+	snprintf(rbuf+offset, rlen - strlen(rbuf),
+		"%08x", stats.statsTLVsUnrecognizedTotal);
 	offset+=8;
-	sprintf(rbuf+offset, "%08x", stats.statsAgeoutsTotal);
+	snprintf(rbuf+offset, rlen - strlen(rbuf),
+		"%08x", stats.statsAgeoutsTotal);
 
 	return cmd_success;
 }
@@ -321,18 +421,22 @@ int mand_clif_cmd(void  *data,
 		  struct sockaddr_un *from,
 		  socklen_t fromlen,
 		  char *ibuf, int ilen,
-		  char *rbuf)
+		  char *rbuf, int rlen)
 {
 	struct cmd cmd;
-	u8 len;
-	u8 arglen;
-	u16 argvalue_len;
+	struct port *port;
+	u8 len, version;
 	int ioff, roff;
 	int rstatus = cmd_invalid;
-	char *arg = NULL;
-	char *argvalue = NULL;
+	char **args;
+	char **argvals;
+	bool test_failed = false;
+	int numargs = 0;
+	int i, offset;
 
 	/* pull out the command elements of the command message */
+	hexstr2bin(ibuf+MSG_VER, (u8 *)&version, sizeof(u8));
+	version = version >> 4;
 	hexstr2bin(ibuf+CMD_CODE, (u8 *)&cmd.cmd, sizeof(cmd.cmd));
 	hexstr2bin(ibuf+CMD_OPS, (u8 *)&cmd.ops, sizeof(cmd.ops));
 	cmd.ops = ntohl(cmd.ops);
@@ -346,6 +450,15 @@ int mand_clif_cmd(void  *data,
 	cmd.ifname[len] = '\0';
 	ioff += len;
 
+	if (version == CLIF_MSG_VERSION) {
+		hexstr2bin(ibuf+ioff, &cmd.type, sizeof(cmd.type));
+		ioff += 2*sizeof(cmd.type);
+	} else {
+		cmd.type = NEAREST_BRIDGE;
+		LLDPAD_WARN("deprecated client interface message version %x\n",
+			     version);
+	}
+
 	if (cmd.cmd == cmd_gettlv || cmd.cmd == cmd_settlv) {
 		hexstr2bin(ibuf+ioff, (u8 *)&cmd.tlvid, sizeof(cmd.tlvid));
 		cmd.tlvid = ntohl(cmd.tlvid);
@@ -354,75 +467,110 @@ int mand_clif_cmd(void  *data,
 		cmd.tlvid = INVALID_TLVID;
 	}
 
-	/* check for an arg and argvalue */
-	if (ilen - ioff > 2*sizeof(arglen)) {
-		hexstr2bin(ibuf+ioff, &arglen, sizeof(arglen));
-		ioff += 2*sizeof(arglen);
-		if (ilen - ioff >= arglen) {
-			arg = ibuf+ioff;
-			ioff += arglen;
-
-			if (ilen - ioff > 2*sizeof(argvalue_len)) {
-				hexstr2bin(ibuf+ioff, (u8 *)&argvalue_len,
-					   sizeof(argvalue_len));
-				argvalue_len = ntohs(argvalue_len);
-				ioff += 2*sizeof(argvalue_len);
-				if (ilen - ioff >= argvalue_len) {
-					argvalue = ibuf+ioff;
-					ioff += argvalue_len;
-				}
-			}
+	/* count args and argvalus */
+	offset = ioff;
+	for (numargs = 0; (ilen - offset) > 2; numargs++) {
+		offset += 2;
+		if (ilen - offset > 0) {
+			offset++;
+			if (ilen - offset > 4)
+				offset += 4;
 		}
 	}
 
-	if (arg)
-		arg[arglen] = '\0';
-	if (argvalue)
-		argvalue[argvalue_len] = '\0';
-	
-	sprintf(rbuf, "%c%1x%02x%08x%02x%s", CMD_REQUEST, CLIF_MSG_VERSION,
-		cmd.cmd, cmd.ops, (unsigned int)strlen(cmd.ifname), cmd.ifname);
+	args = calloc(numargs, sizeof(char *));
+	if (!args)
+		return cmd_failed;
+
+	argvals = calloc(numargs, sizeof(char *));
+	if (!argvals) {
+		free(args);
+		return cmd_failed;
+	}
+
+	if ((cmd.ops & op_arg) && (cmd.ops & op_argval))
+		numargs = get_arg_val_list(ibuf, ilen, &ioff, args, argvals);
+	else if (cmd.ops & op_arg)
+		numargs = get_arg_list(ibuf, ilen, &ioff, args);
+
+	snprintf(rbuf, rlen, "%c%1x%02x%08x%02x%s",
+		 CMD_REQUEST, CLIF_MSG_VERSION,
+		 cmd.cmd, cmd.ops,
+		(unsigned int)strlen(cmd.ifname), cmd.ifname);
 	roff = strlen(rbuf);
+
+	/* Confirm port is a lldpad managed port */
+	port = port_find_by_name(cmd.ifname);
+	if (!port) {
+		free(argvals);
+		free(args);
+		return cmd_device_not_found;
+	}
 
 	switch (cmd.cmd) {
 	case cmd_getstats:
-		if (arg || argvalue)
+		if (numargs)
 			break;
-		rstatus = get_port_stats(&cmd, rbuf+roff);
+		rstatus = get_agent_stats(&cmd, rbuf + roff, rlen - roff);
 		break;
 	case cmd_gettlv:
-		sprintf(rbuf+roff, "%08x", cmd.tlvid);
+		snprintf(rbuf + roff, rlen - roff, "%08x", cmd.tlvid);
 		roff+=8;
-		if (argvalue)
-			break;
-		if (arg)
-			rstatus = handle_get_arg(&cmd, arg, NULL,
-						 rbuf+strlen(rbuf));
-		else
-			rstatus = get_tlvs(&cmd, rbuf+roff);
+		if (!numargs) {
+			if (cmd.ops & op_config) {
+				if (cmd.ops & op_neighbor)
+					break;
+				rstatus = handle_get_args(&cmd, NULL, NULL,
+							 rbuf + strlen(rbuf),
+							 rlen - strlen(rbuf));
+			} else {
+				rstatus = get_tlvs(&cmd, rbuf+roff, rlen-roff);
+			}
+		} else if ((cmd.ops & op_config) && !(cmd.ops & op_neighbor)) {
+			for (i = 0; i < numargs; i++)
+				rstatus = handle_get_arg(&cmd, args[i], NULL,
+							 rbuf + strlen(rbuf),
+							 rlen - strlen(rbuf));
+		}
 		break;
 	case cmd_settlv:
-		sprintf(rbuf+roff, "%08x", cmd.tlvid);
+		snprintf(rbuf + roff, rlen - roff, "%08x", cmd.tlvid);
 		roff+=8;
-		if (arg && argvalue)
-			rstatus = handle_set_arg(&cmd, arg, argvalue,
-					 rbuf+strlen(rbuf));
+		for (i = 0; i < numargs; i++) {
+			rstatus = handle_test_arg(&cmd, args[i], argvals[i],
+						  rbuf+strlen(rbuf),
+						  rlen - strlen(rbuf));
+			if (rstatus != cmd_not_applicable &&
+			    rstatus != cmd_success) {
+				test_failed = true;
+				break;
+			}
+		}
+		if (test_failed)
+			break;
+		for (i = 0; i < numargs; i++)
+			rstatus = handle_set_arg(&cmd, args[i], argvals[i],
+						 rbuf + strlen(rbuf),
+						 rlen - strlen(rbuf));
 		break;
 	case cmd_get_lldp:
-		if (argvalue)
-			break;
-		if (arg)
-			rstatus = handle_get_arg(&cmd, arg, NULL,
-					 rbuf+strlen(rbuf));
+		for (i = 0; i < numargs; i++)
+			rstatus = handle_get_arg(&cmd, args[i], NULL,
+						 rbuf + strlen(rbuf),
+						 rlen - strlen(rbuf));
 		break;
 	case cmd_set_lldp:
-		if (arg && argvalue)
-			rstatus = handle_set_arg(&cmd, arg, argvalue,
-				rbuf+strlen(rbuf));
+		for (i = 0; i < numargs; i++)
+			rstatus = handle_set_arg(&cmd, args[i], argvals[i],
+						 rbuf + strlen(rbuf),
+						 rlen - strlen(rbuf));
 		break;
 	default:
+		rstatus = cmd_invalid;
 		break;
 	}
 
+	free(argvals);
+	free(args);
 	return rstatus;
 }

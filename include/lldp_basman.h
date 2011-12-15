@@ -20,8 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
-  e1000-eedc Mailing List <e1000-eedc@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+  open-lldp Mailing List <lldp-devel@open-lldp.org>
 
 *******************************************************************************/
 
@@ -30,11 +29,13 @@
 
 #include "lldp.h"
 #include "lldp_mod.h"
+#include "lldp_tlv.h"
 
 #define LLDP_MOD_BASIC	2
 
 struct basman_data {
 	char ifname[IFNAMSIZ];
+	enum agent_type agenttype;
 	struct unpacked_tlv *portdesc;
 	struct unpacked_tlv *sysname;
 	struct unpacked_tlv *sysdesc;
@@ -50,8 +51,8 @@ struct basman_user_data {
 
 struct lldp_module *basman_register(void);
 void basman_unregister(struct lldp_module *mod);
-struct packed_tlv *basman_gettlv(struct port *port);
-void basman_ifdown(char *);
-void basman_ifup(char *);
+struct packed_tlv *basman_gettlv(struct port *, struct lldp_agent *);
+void basman_ifdown(char *, struct lldp_agent *);
+void basman_ifup(char *, struct lldp_agent *);
 
 #endif /* _LLDP_BASMAN_H */
