@@ -10,9 +10,11 @@
 #export DH_VERBOSE=1
 
 %:
-	dh $@ 
+	dh $@ --with autoreconf
 
-override_dh_auto_install:
-	dh_auto_install
-	ln -T -s /usr/include/lldpad debian/tmp/usr/include/dcbd
-	ln -T -s /usr/include/lldpad/lldp_dcbx_cmds.h debian/tmp/usr/include/lldpad/clif_cmds.h
+override_dh_autoreconf:
+	dh_autoreconf --as-needed
+
+override_dh_auto_clean:
+	dh_auto_clean
+	-rm parse_cli.c

@@ -4,6 +4,7 @@ lldpad (0.9.43+git20111215.c0498b-1) experimental; urgency=low
   * debian/control:
     - Update homepage
     - Add libnl-dev, flex, dh-autoreconf to Build-Depends
+  * debian/rules: use dh_autoreconf to deal bootstrap.sh issue
 
  -- Liang Guo <bluestonechina@gmail.com>  Thu, 15 Dec 2011 22:58:32 +0800
 
