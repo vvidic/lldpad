@@ -3,7 +3,7 @@ Add Short-Description.
 Change default start and stop runlevel.
 --- a/lldpad.init
 +++ b/lldpad.init
-@@ -38,11 +38,12 @@
+@@ -37,12 +37,12 @@
  #
  ### BEGIN INIT INFO
  # Provides: lldpad
@@ -11,6 +11,7 @@ Change default start and stop runlevel.
 -# Required-Stop:
 -# Default-Start: 3 5
 -# Default-Stop:
+-# Short Description: Link Layer Discovery Protocol Agent Daemon
 -# Description: Link Layer Discovery Protocol Agent Daemon
 +# Required-Start: $network $remote_fs
 +# Required-Stop: $network $remote_fs

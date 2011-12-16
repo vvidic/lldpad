@@ -2,62 +2,12 @@ Don't create /usr/include/dcbd and /usr/include/dcbd/clif_cmds.h in makefile.
 They will be created by debian/rules.
 --- a/Makefile.am
 +++ b/Makefile.am
-@@ -81,11 +81,6 @@
+@@ -94,11 +94,6 @@
  	$(MKDIR_P) $(DESTDIR)/etc/init.d
  	$(INSTALL_SCRIPT) lldpad.init $(DESTDIR)/etc/init.d/lldpad
  
 -install-data-hook:
 -	## provide legacy support for apps that use the old dcbd interface.
--	test -e $(includedir)/dcbd || `ln -T -s $(includedir)/lldpad $(includedir)/dcbd`
--	test -e $(includedir)/dcbd/clif_cmds.h || `ln -T -s $(includedir)/lldpad/lldp_dcbx_cmds.h $(includedir)/dcbd/clif_cmds.h`
--
- uninstall-local:
- 	rm -f '$(DESTDIR)/etc/init.d/lldpad'
- 	rm -f '$(includedir)/dcbd/clif_cmds.h'
---- a/Makefile.in
-+++ b/Makefile.in
-@@ -903,8 +903,7 @@
- 
- install-data-am: install-data-local install-lldpad_includeHEADERS \
- 	install-lldpadconfigDATA install-man install-pkgconfigDATA
--	@$(NORMAL_INSTALL)
--	$(MAKE) $(AM_MAKEFLAGS) install-data-hook
-+
- install-dvi: install-dvi-am
- 
- install-dvi-am:
-@@ -956,7 +955,7 @@
- 
- uninstall-man: uninstall-man8
- 
--.MAKE: install-am install-data-am install-strip
-+.MAKE: install-am install-strip
- 
- .PHONY: CTAGS GTAGS all all-am am--refresh check check-am clean \
- 	clean-generic clean-noinstPROGRAMS clean-sbinPROGRAMS ctags \
-@@ -965,12 +964,11 @@
- 	distclean-compile distclean-generic distclean-tags \
- 	distcleancheck distdir distuninstallcheck dvi dvi-am html \
- 	html-am info info-am install install-am install-data \
--	install-data-am install-data-hook install-data-local \
--	install-dvi install-dvi-am install-exec install-exec-am \
--	install-html install-html-am install-info install-info-am \
--	install-lldpad_includeHEADERS install-lldpadconfigDATA \
--	install-man install-man8 install-pdf install-pdf-am \
--	install-pkgconfigDATA install-ps install-ps-am \
-+	install-data-am install-data-local install-dvi install-dvi-am \
-+	install-exec install-exec-am install-html install-html-am \
-+	install-info install-info-am install-lldpad_includeHEADERS \
-+	install-lldpadconfigDATA install-man install-man8 install-pdf \
-+	install-pdf-am install-pkgconfigDATA install-ps install-ps-am \
- 	install-sbinPROGRAMS install-strip installcheck \
- 	installcheck-am installdirs maintainer-clean \
- 	maintainer-clean-generic mostlyclean mostlyclean-compile \
-@@ -984,10 +982,6 @@
- 	$(MKDIR_P) $(DESTDIR)/etc/init.d
- 	$(INSTALL_SCRIPT) lldpad.init $(DESTDIR)/etc/init.d/lldpad
- 
--install-data-hook:
 -	test -e $(includedir)/dcbd || `ln -T -s $(includedir)/lldpad $(includedir)/dcbd`
 -	test -e $(includedir)/dcbd/clif_cmds.h || `ln -T -s $(includedir)/lldpad/lldp_dcbx_cmds.h $(includedir)/dcbd/clif_cmds.h`
 -
