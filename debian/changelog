@@ -1,6 +1,7 @@
-lldpad (0.9.43+git20111215.c0498b-1) experimental; urgency=low
+lldpad (0.9.43+git20111215.c0498b-1) unstable; urgency=low
 
   * New upstream release
+  * Upload to unstable
   * debian/control:
     - Update homepage
     - Add libnl-dev, flex, dh-autoreconf to Build-Depends
