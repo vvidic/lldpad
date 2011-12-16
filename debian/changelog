@@ -1,3 +1,12 @@
+lldpad (0.9.43+git20111215.c0498b-1) experimental; urgency=low
+
+  * New upstream release
+  * debian/control:
+    - Update homepage
+    - Add libnl-dev, flex, dh-autoreconf to Build-Depends
+
+ -- Liang Guo <bluestonechina@gmail.com>  Thu, 15 Dec 2011 22:58:32 +0800
+
 lldpad (0.9.38-1) experimental; urgency=low
 
   [ Liang Guo ]
