@@ -13,8 +13,9 @@
 	dh $@ --with autoreconf
 
 override_dh_autoreconf:
-	dh_autoreconf --as-needed
-
+	libtoolize
+	dh_autoreconf
+	
 override_dh_auto_clean:
 	dh_auto_clean
 	-rm parse_cli.c
