@@ -1,3 +1,9 @@
+lldpad (0.9.43+git20111215.c0498b-2) UNRELEASED; urgency=low
+
+  * Replase libconfig8-dev to libconfig-dev (Closes: #661408)
+
+ -- Liang Guo <bluestonechina@gmail.com>  Fri, 09 Mar 2012 20:59:50 +0800
+
 lldpad (0.9.43+git20111215.c0498b-1) unstable; urgency=low
 
   * New upstream release
