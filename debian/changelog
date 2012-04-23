@@ -7,8 +7,11 @@ lldpad (0.9.44-1) unstable; urgency=low
   * debian/control:
     - Bump Standards-Version to 3.9.3
     - Add libreadline-dev to Build-Depends
+  * debian/copyright:
+    - Update download link
+    - Update copyright information
 
- -- Liang Guo <bluestonechina@gmail.com>  Mon, 23 Apr 2012 22:02:53 +0800
+ -- Liang Guo <bluestonechina@gmail.com>  Mon, 23 Apr 2012 22:16:29 +0800
 
 lldpad (0.9.43+git20111215.c0498b-1) unstable; urgency=low
 

@@ -4,10 +4,10 @@ This work was packaged for Debian by:
 
 It was downloaded from:
 
-    http://sourceforge.net/projects/e1000/files/DCB%20Tools/lldpad/0.9.38/lldpad-0.9.38.tar.gz/
+    http://www.open-lldp.org/open-lldp/downloads
 
 Files: *
-Copyright: Copyright(c) 2007-2010 Intel Corporation.
+Copyright: Copyright(c) 2007-2012 Intel Corporation.
 License: GPL-2
 --------------------------------------------------------------------------------
     This program is free software; you can redistribute it and/or modify it
