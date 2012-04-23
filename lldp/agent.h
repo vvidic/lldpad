@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -150,8 +150,8 @@ struct lldp_agent {
         LIST_ENTRY(lldp_agent) entry;
 };
 
-struct lldp_agent *lldp_agent_find_by_type(const char *, int);
-int lldp_add_agent(const char *ifname, int type);
+struct lldp_agent *lldp_agent_find_by_type(const char *, enum agent_type);
+int lldp_add_agent(const char *ifname, enum agent_type);
 
 void set_lldp_agent_admin(const char *ifname, int type, int enable);
 int get_lldp_agent_admin(const char *ifname, int type);

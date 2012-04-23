@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -100,15 +100,15 @@ typedef struct dcb_traffic_attribs {
 #define DCB_START_SEQ_NUMBER    0
 
 /*  Definitions for dcb protocol event Flags. */
-#define DCB_LOCAL_CHANGE_PG      0x00000001
-#define DCB_REMOTE_CHANGE_PG     0x00000002
-#define DCB_LOCAL_CHANGE_PFC     0x00000004
-#define DCB_REMOTE_CHANGE_PFC    0x00000008
-#define DCB_LOCAL_CHANGE_LLINK   0x00000010
-#define DCB_REMOTE_CHANGE_LLINK  0x00000020
-#define DCB_LOCAL_CHANGE_APP     0x00000040
-#define DCB_REMOTE_CHANGE_APP    0x00000080
-#define DCB_EVENT_FLAGS          0x00000FFF  
+#define DCB_LOCAL_CHANGE_PG      0x00000001U
+#define DCB_REMOTE_CHANGE_PG     0x00000002U
+#define DCB_LOCAL_CHANGE_PFC     0x00000004U
+#define DCB_REMOTE_CHANGE_PFC    0x00000008U
+#define DCB_LOCAL_CHANGE_LLINK   0x00000010U
+#define DCB_REMOTE_CHANGE_LLINK  0x00000020U
+#define DCB_LOCAL_CHANGE_APP     0x00000040U
+#define DCB_REMOTE_CHANGE_APP    0x00000080U
+#define DCB_EVENT_FLAGS          0x00000FFFU
 
 /*  There are multiple APP event flags, one for each subtype */
 #define DCB_EVT_SUB(e, sub)	 ((e) << ((sub)*2))

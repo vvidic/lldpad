@@ -911,7 +911,7 @@ int dcbx_add_adapter(char *device_name)
 	u32 EventFlag = 0;
 	full_dcb_attrib_ptrs attr_ptr;
 	full_dcb_attribs attribs;
-	feature_support dcb_support = {0};
+	feature_support dcb_support = { .pg = 0 };
 	dcb_result sResult = dcb_success;
 	dcbx_state state;
 	int i = 0;
@@ -1279,7 +1279,6 @@ static int dcbx_free_app_config(char *device_name)
 int dcbx_remove_all(void)
 {
 	pg_it it;
-	char sTmp[MAX_DEVICE_NAME_LEN*2];
 
 	clear_dcbx_state();
 
@@ -1293,31 +1292,9 @@ int dcbx_remove_all(void)
 
 		/* Remove kernel APP entries */
 		dcbx_free_app_config(it->ifname);
-
-		/* prepare sTmp in case of error */
-		snprintf(sTmp, MAX_DEVICE_NAME_LEN*2, /* Localization OK */
-			"Remove_all_adapters error: Bad device name: %.*s\n",
-			MAX_DEVICE_NAME_LEN, it->ifname);
-		if (remove_port((char *) (it->ifname)) < 0)
-			LLDPAD_DBG(sTmp);
 	}
 
 	return 0;
-}
-
-/* Function to find all the dcb devices from store and remove them. */
-void remove_all_adapters()
-{
-	struct port *port, *p;
-
-	port = porthead;
-	while (port != NULL) {
-		p = port;
-		port = port->next;
-		remove_port(p->ifname);
-	}
-
-	return;
 }
 
 bool add_pg_defaults()
@@ -1907,7 +1884,7 @@ dcb_result put_app(char *device_name, u32 subtype, app_attribs *app_data)
 	full_dcb_attrib_ptrs attr_ptr;
 	u32              EventFlag = 0;
 	dcb_result       result = dcb_success;
-	int i;
+	unsigned i;
 
 	if (!app_data)
 		return dcb_bad_params;
@@ -3941,7 +3918,8 @@ dcb_result run_dcb_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 	dcb_result result = dcb_success;
 	bool LocalChange = false;
 	u32 i, SubTypeMin, SubTypeMax;
-	int oper, mask;
+	struct dcbx_tlvs *tlvs;
+	int mask;
 
 	LLDPAD_DBG("running DCB protocol for %s, flags:%04x\n", device_name,
 		EventFlag);
@@ -4030,10 +4008,10 @@ dcb_result run_dcb_protocol(char *device_name, u32 EventFlag, u32 Subtype)
 	}
 
 	/* apply all feature setting to the driver: linux only */
-	oper = get_operstate(device_name);
-	if (oper == IF_OPER_UP || oper == IF_OPER_UNKNOWN) {
+	tlvs = dcbx_data(device_name);
+	if (tlvs && tlvs->operup) {
 		LLDPAD_DBG("%s: %s: Managed DCB device coming online, program HW\n",
-			__func__, device_name);
+			    __func__, device_name);
 		set_hw_all(device_name);
 	}
 

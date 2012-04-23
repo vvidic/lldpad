@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -146,8 +146,10 @@ void set_lldp_agent_admin(const char *ifname, int type, int admin)
 			}
 
 			agent = lldp_agent_find_by_type(port->ifname, type);
-			if (agent == NULL)
+			if (!agent) {
+				port = port->next;
 				continue;
+			}
 
 			if (agent->adminStatus != admin) {
 				agent->adminStatus = admin;

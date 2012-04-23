@@ -56,14 +56,19 @@ static int set_arg_role(struct cmd *, char *, char *, char *, int);
 static int test_arg_role(struct cmd *, char *, char *, char *, int);
 
 static struct arg_handlers arg_handlers[] = {
-	{ ARG_VDP_MODE, TLV_ARG,
-		get_arg_mode, set_arg_mode, test_arg_mode },
-	{ ARG_VDP_ROLE, TLV_ARG,
-		get_arg_role, set_arg_role, test_arg_role },
-	{ ARG_TLVTXENABLE, TLV_ARG,
-		get_arg_tlvtxenable, set_arg_tlvtxenable,
-		test_arg_tlvtxenable },
-	{ NULL }
+	{	.arg = ARG_VDP_MODE, .arg_class = TLV_ARG,
+		.handle_get = get_arg_mode,
+		.handle_set = set_arg_mode,
+		.handle_test = test_arg_mode, },
+	{	.arg = ARG_VDP_ROLE, .arg_class = TLV_ARG,
+		.handle_get = get_arg_role,
+		.handle_set = set_arg_role,
+		.handle_test = test_arg_role, },
+	{	.arg = ARG_TLVTXENABLE, .arg_class = TLV_ARG,
+		.handle_get = get_arg_tlvtxenable,
+		.handle_set = set_arg_tlvtxenable,
+		.handle_test = test_arg_tlvtxenable, },
+	{	.arg = 0 }
 };
 
 static const char * const vsi_modes[] = {
@@ -299,7 +304,7 @@ static int get_arg_mode(struct cmd *cmd, char *arg, char *argvalue,
 
 static void str2instance(struct vsi_profile *profile, char *buffer)
 {
-	int i, j = 0;
+	unsigned int i, j = 0;
 
 	for(i=0; i <= strlen(buffer); i++) {
 		if (buffer[i] == '-') {
@@ -360,7 +365,7 @@ static void vdp_fill_profile(struct vsi_profile *profile, char *buffer, int fiel
 
 static struct vsi_profile *vdp_parse_mode_line(char * argvalue)
 {
-	int arglen, field;
+	int field;
 	char *cmdstring, *parsed;
 	struct vsi_profile *profile;
 
@@ -369,8 +374,10 @@ static struct vsi_profile *vdp_parse_mode_line(char * argvalue)
 		return NULL;
 	memset(profile, 0, sizeof(struct vsi_profile));
 
-	arglen = strlen(argvalue);
 	cmdstring = strdup(argvalue);
+	if (!cmdstring)
+		goto out_free;
+
 	field = 0;
 
 	parsed = strtok(cmdstring, ",");
@@ -406,9 +413,16 @@ static struct vsi_profile *vdp_parse_mode_line(char * argvalue)
 		parsed = strtok(NULL, ",");
 	}
 
+	free(cmdstring);
 	return profile;
 
 out_free:
+	free(cmdstring);
+	while (profile->entries-- > 0) {
+		struct mac_vlan *mac_vlan = LIST_FIRST(&profile->macvid_head);
+		LIST_REMOVE(mac_vlan, entry);
+		free(mac_vlan);
+	}
 	free(profile);
 	return NULL;
 }
@@ -416,10 +430,7 @@ out_free:
 static int _set_arg_mode(struct cmd *cmd, char *arg, char *argvalue,
 			 char *obuf, bool test)
 {
-	int arglen;
 	struct vsi_profile *profile, *p;
-
-	arglen = strlen(argvalue);
 
 	if (cmd->cmd != cmd_settlv)
 		return cmd_invalid;
@@ -479,27 +490,27 @@ static int get_arg_role(struct cmd *cmd, char *arg, char *argvalue,
 	if (cmd->cmd != cmd_gettlv)
 		return cmd_invalid;
 
-	vd = vdp_data(cmd->ifname);
-
-	if (!vd) {
-		LLDPAD_ERR("%s(%i): could not find vdp_data for %s !\n",
-			    __FILE__, __LINE__, cmd->ifname);
-		return cmd_invalid;
-	}
-
 	switch (cmd->tlvid) {
 	case ((LLDP_MOD_VDP) << 8) | LLDP_VDP_SUBTYPE:
-		if (vd->role == VDP_ROLE_STATION) {
+		vd = vdp_data(cmd->ifname);
+
+		if (!vd) {
+			LLDPAD_ERR("%s(%i): could not find vdp_data for %s !\n",
+				    __FILE__, __LINE__, cmd->ifname);
+			return cmd_invalid;
+		}
+
+		if (vd->role == VDP_ROLE_STATION)
 			snprintf(obuf, obuf_len, "%02x%s%04x%s",
 				(unsigned int) strlen(arg), arg,
-	 			(unsigned int) strlen("station"), "station");
-		} else if (vd->role == VDP_ROLE_BRIDGE) {
+				(unsigned int) strlen(VAL_STATION),
+				VAL_STATION);
+		else if (vd->role == VDP_ROLE_BRIDGE)
 			snprintf(obuf, obuf_len, "%02x%s%04x%s",
 				(unsigned int) strlen(arg), arg,
-				(unsigned int) strlen("bridge"), "bridge");
-		} else {
+				(unsigned int) strlen(VAL_BRIDGE), VAL_BRIDGE);
+		else
 			return cmd_failed;
-	 	}
 		break;
 	case INVALID_TLVID:
 		return cmd_invalid;

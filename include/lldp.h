@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -242,6 +242,7 @@ enum {
 #define LLDP_EVB_DEFAULT_MAX_VSI			65535
 #define LLDP_EVB_DEFAULT_SVSI				3295
 #define LLDP_EVB_DEFAULT_RTE				15
+#define LLDP_EVB_DEFAULT_MAX_RTE			31
 
 void somethingChangedLocal(const char *ifname, int type);
 #endif /* _LLDP_H */

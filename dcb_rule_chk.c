@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2011 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -103,6 +103,7 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 	int i, j, pgid, bw, cnt, r;
 	int be, pfc, strict, cbe, cpfc, cstrict;
 	int tcbw[8] = {0};
+	bool pg_done[8] = { 0 };
 	int totalbw = 0;
 
 	LLDPAD_INFO("%s : fixup\n", __func__);
@@ -115,11 +116,13 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 	pgid++;
 
 	/* If the PGIDs can be mapped onto the number of existing traffic
-	 * classes do it and retur
+	 * classes do it and return
 	 */
 	if (pgid <= fixpg->num_tcs) {
-		for (i = 0; i < MAX_USER_PRIORITIES; i++)
+		for (i = 0; i < MAX_USER_PRIORITIES; i++) {
 			fixpg->tx.up[i].tcmap = fixpg->tx.up[i].pgid;
+			fixpg->rx.up[i].tcmap = fixpg->rx.up[i].pgid;
+		}
 		return 0;
 	}
 
@@ -207,8 +210,11 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 					be = 0;
 			}
 
-			tcbw[pgid] += fixpg->tx.pg_percent[j];
-			totalbw += fixpg->tx.pg_percent[j];
+			if (pg_done[i] == false) {
+				tcbw[pgid] += fixpg->tx.pg_percent[i];
+				totalbw += fixpg->tx.pg_percent[i];
+				pg_done[i] = true;
+			}
 
 			/* Do row move from old pgid to new pgid */
 			LLDPAD_INFO("%s: matrix: (%i,%i) -> (%i,%i)\n",
@@ -240,6 +246,10 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 
 			LLDPAD_INFO("%s: result: up(%i): map %i->%i\n",
 				    __func__,  j, entry->pgid, i);
+
+			fixpg->rx.up[j].pgid = i;
+			fixpg->rx.up[j].tcmap = i;
+
 			entry->pgid = i;
 			entry->tcmap = i;
 			bw += entry->percent_of_pg_cap;
@@ -258,16 +268,20 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 
 			if (entry->strict_priority == dcb_link) {
 				entry->percent_of_pg_cap = 0;
+				fixpg->rx.up[j].percent_of_pg_cap = 0;
 			} else {
 				entry->percent_of_pg_cap = bw + r;
+				fixpg->rx.up[j].percent_of_pg_cap = bw + r;
 				r = 0;
 			}
 		}
 	}
 
 	/* Final Pass: Distribute TC bandwidth */
-	for (i = 0; i < MAX_TRAFFIC_CLASS; i++)
+	for (i = 0; i < MAX_TRAFFIC_CLASS; i++) {
 		fixpg->tx.pg_percent[i] = tcbw[i];
+		fixpg->rx.pg_percent[i] = tcbw[i];
+	}
 
 	return 0;
 }
