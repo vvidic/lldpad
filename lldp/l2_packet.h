@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -96,7 +96,7 @@ struct l2_ethhdr {
  */
 struct l2_packet_data *l2_packet_init(
 	const char *ifname, const u8 *own_addr, unsigned short protocol,
-	void (*rx_callback)(void *ctx, unsigned int ifindex,
+	void (*rx_callback)(void *ctx, int ifindex,
 			    const u8 *buf, size_t len),
 	void *rx_callback_ctx, int l2_hdr);
 
@@ -146,7 +146,7 @@ void l2_packet_get_port_state(struct l2_packet_data *, u8 *);
 
 struct port * add_bond_port(const char *ifname);
 int remove_bond_port(const char *ifname);
-void recv_on_bond(void *ctx, unsigned int ifindex, const u8 *buf, size_t len);
+void recv_on_bond(void *ctx, int ifindex, const u8 *buf, size_t len);
 void remove_all_bond_ports(void);
 
 #endif /* L2_PACKET_H */

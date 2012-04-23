@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -27,6 +27,7 @@
 #ifndef _LLDP_MAND_CMDS_H
 #define _LLDP_MAND_CMDS_H
 
+#define ARG_MAND_SUBTYPE "subtype"
 
 struct arg_handlers *mand_get_arg_handlers();
 

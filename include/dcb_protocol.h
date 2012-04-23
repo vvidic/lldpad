@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -127,8 +127,6 @@ void rebalance_uppcts(pg_attribs *pg);
 dcb_result run_feature_protocol(char *device_name, u32 EventFlag, u32 Subtype);
 dcb_result run_control_protocol(char *device_name, u32 EventFlag);
 dcb_result run_dcb_protocol(char *device_name, u32 EventFlag, u32 Subtype);
-
-void remove_all_adapters(void);
 
 dcb_result save_dcbx_state(const char *device_name);
 int set_dcbx_state(const char *device_name, dcbx_state *state);

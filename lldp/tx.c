@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -307,15 +307,6 @@ bool set_tx_state(struct port *port, struct lldp_agent *agent)
 
 void process_tx_idle(struct lldp_agent *agent)
 {
-	u32 tmpTTL;
-
-	tmpTTL = DEFAULT_TX_INTERVAL * agent->timers.msgTxHold + 1;
-
-	if (tmpTTL < 65535)
-		agent->tx.txTTL = htons(65535);
-	else
-		agent->tx.txTTL = htons((u16)tmpTTL);
-
 	return;
 }
 

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2011 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -176,7 +176,8 @@ static int send_msg(struct nlmsghdr *nlh)
 static struct nlmsghdr *get_msg(unsigned int seq)
 {
 	struct nlmsghdr *nlh;
-	int len;
+	unsigned len;
+	int res;
 	int found = 0;
 
 	/* nlh needs to be free'd by caller */
@@ -186,8 +187,8 @@ static struct nlmsghdr *get_msg(unsigned int seq)
 	memset(nlh, 0, MAX_MSG_SIZE);
 
 	while (!found) {
-		len = recv(nl_sd, (void *)nlh, MAX_MSG_SIZE, MSG_DONTWAIT);
-		if (len < 0) {
+		res = recv(nl_sd, (void *)nlh, MAX_MSG_SIZE, MSG_DONTWAIT);
+		if (res < 0) {
 			if (errno == EINTR)
 				continue;
 			perror("get_msg: recv error");
@@ -195,7 +196,8 @@ static struct nlmsghdr *get_msg(unsigned int seq)
 			nlh = NULL;
 			break;
 		}
-		if (!(NLMSG_OK(nlh, (unsigned int)len))) {
+		len = res;
+		if (!(NLMSG_OK(nlh, len))) {
 			LLDPAD_DBG("get_msg: NLMSG_OK is false\n");
 			free(nlh);
 			nlh = NULL;
@@ -788,7 +790,7 @@ int set_hw_app(char *ifname, appgroup_attribs *app_data)
 	return(recv_msg(DCB_CMD_SAPP, DCB_ATTR_APP, seq));
 }
 
-void run_cmd(char *cmd, ...)
+int run_cmd(char *cmd, ...)
 {
 	char cbuf[128];
 	va_list args;
@@ -796,8 +798,7 @@ void run_cmd(char *cmd, ...)
 	va_start(args, cmd);
 	vsprintf(cbuf, cmd, args);
 	va_end(args);
-	system(cbuf);
-	return;
+	return system(cbuf);
 }
 
 int set_hw_all(char *ifname)

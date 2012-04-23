@@ -1,7 +1,7 @@
 /******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2011 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -426,12 +426,11 @@ void ieee8021qaz_ifup(char *ifname, struct lldp_agent *agent)
 	struct port *port = NULL;
 	struct ieee8021qaz_tlvs *tlvs;
 	struct ieee8021qaz_user_data *iud;
-	int adminstatus;
+	int adminstatus, cnt, len;
 	feature_support dcb_support;
 	struct ieee_ets *ets = NULL;
 	struct ieee_pfc *pfc = NULL;
 	struct app_prio *data = NULL;
-	int cnt, err;
 
 	if (agent->type != NEAREST_BRIDGE)
 		return;
@@ -451,7 +450,7 @@ void ieee8021qaz_ifup(char *ifname, struct lldp_agent *agent)
 		goto initialized;
 
 	if (!init_cfg()) {
-		LLDPAD_ERR("%s: 802.1Qaz: fatal init_cfg() faillure\n",
+		LLDPAD_ERR("%s: 802.1Qaz: fatal init_cfg() failure\n",
 			   __func__);
 		return;
 	}
@@ -538,12 +537,10 @@ void ieee8021qaz_ifup(char *ifname, struct lldp_agent *agent)
 
 initialized:
 	/* Query hardware and set maximum number of TCs with hardware values */
-	err = get_ieee_hw(ifname, &ets, &pfc, &data, &cnt);
-	if (err > 0) {
-		if (ets->ets_cap)
-			tlvs->ets->cfgl->max_tcs = ets->ets_cap;
-		if (pfc->pfc_cap)
-			tlvs->pfc->local.pfc_cap = pfc->pfc_cap;
+	len = get_ieee_hw(ifname, &ets, &pfc, &data, &cnt);
+	if (len > 0) {
+		tlvs->ets->cfgl->max_tcs = ets->ets_cap;
+		tlvs->pfc->local.pfc_cap = pfc->pfc_cap;
 
 		free(ets);
 		free(pfc);

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   LLDP Agent Daemon (LLDPAD) Software
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -135,7 +135,7 @@ void rxInitializeLLDP(struct port *port, struct lldp_agent *);
  * 2: The flag variable tooManyNghbrs is automatically reset when the
  *    tooManyNghbrsTimer expires.
 */
-void rxReceiveFrame(void *, unsigned int, const u8 *, size_t );
+void rxReceiveFrame(void *, int ifindex, const u8 *, size_t);
 void rxProcessFrame(struct port *, struct lldp_agent *);
 
 /**
