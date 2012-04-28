@@ -1,4 +1,3 @@
 usr/share/man/man8/*
 usr/sbin/*
-var/lib/lldpad
 etc/init.d/lldpad
