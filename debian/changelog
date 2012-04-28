@@ -2,8 +2,6 @@ lldpad (0.9.44-1) unstable; urgency=low
 
   * New upstream release
   * Replase libconfig8-dev to libconfig-dev (Closes: #661408)
-  * debian/lldpad.install:
-    - Remove var/lib/lldpad, not used any more (Closes: #669540)
   * debian/control:
     - Bump Standards-Version to 3.9.3
     - Add libreadline-dev to Build-Depends
