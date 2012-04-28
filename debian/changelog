@@ -1,5 +1,6 @@
 lldpad (0.9.44-1) unstable; urgency=low
 
+  [ Liang Guo ]
   * New upstream release
   * Replase libconfig8-dev to libconfig-dev (Closes: #661408)
   * debian/control:
@@ -9,7 +10,10 @@ lldpad (0.9.44-1) unstable; urgency=low
     - Update download link
     - Update copyright information
 
- -- Liang Guo <bluestonechina@gmail.com>  Mon, 23 Apr 2012 22:16:29 +0800
+  [ Ritesh Raj Sarraf ]
+  * [167d25a] Install empty folder for lldpad (Closes: #669540)
+
+ -- Ritesh Raj Sarraf <rrs@debian.org>  Sat, 28 Apr 2012 16:37:33 +0530
 
 lldpad (0.9.43+git20111215.c0498b-1) unstable; urgency=low
 
