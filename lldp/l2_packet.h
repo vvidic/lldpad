@@ -28,6 +28,7 @@
 #define L2_PACKET_H
 
 #include <stdlib.h>
+#include <linux/if_ether.h>
 #include "lldp.h"
 
 #define MAC2STR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
@@ -38,26 +39,11 @@
 
 #define ETH_P_LLDP 0x88cc
 
-/* TODO: use extended ethertype until final ethertype is available */
-#define ETH_P_ECP 0x88b7
-
-#define ETH_FRAME_LEN   1514
-
-#ifndef ETH_MAX_DATA_LEN
-#define ETH_MAX_DATA_LEN    1500
-#endif
-
-/* 6 source + 6 dest + 2 type */
-#ifndef ETH_HDR_LEN
-#define ETH_HDR_LEN         14
-#endif
+#define ETH_P_ECP	0x88b7		/* Draft 0.2 */
+#define ETH_P_ECP22	0x8890		/* Ratified standard */
 
 #ifndef ETH_MIN_DATA_LEN
-#define ETH_MIN_DATA_LEN    46
-#endif
-
-#ifndef ETH_MIN_PKT_LEN
-#define ETH_MIN_PKT_LEN     (ETH_MIN_DATA_LEN + ETH_HDR_LEN)
+#define ETH_MIN_DATA_LEN	(ETH_ZLEN - ETH_HLEN)
 #endif
 
 /**
@@ -141,12 +127,5 @@ void l2_packet_get_remote_addr(struct l2_packet_data *l2, u8 *addr);
  */
 int l2_packet_send(struct l2_packet_data *l2, const u8 *dst_addr, u16 proto,
 			const u8 *buf, size_t len);
-
-void l2_packet_get_port_state(struct l2_packet_data *, u8 *);
-
-struct port * add_bond_port(const char *ifname);
-int remove_bond_port(const char *ifname);
-void recv_on_bond(void *ctx, int ifindex, const u8 *buf, size_t len);
-void remove_all_bond_ports(void);
 
 #endif /* L2_PACKET_H */

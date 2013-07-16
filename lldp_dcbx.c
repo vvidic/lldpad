@@ -40,7 +40,7 @@
 #include "lldpad.h"
 #include "libconfig.h"
 #include "config.h"
-#include "clif_msgs.h"
+#include "lldpad_status.h"
 #include "lldp_mod.h"
 #include "lldp_mand_clif.h"
 #include "lldp_dcbx_nl.h"
@@ -111,12 +111,16 @@ static int dcbx_check_operstate(struct port *port, struct lldp_agent *agent)
 			pfc_data.protocol.OperMode,
 			app_data.protocol.OperMode);
 		tlvs->operup = true;
-		set_operstate(port->ifname, IF_OPER_UP);
+		if (get_operstate(port->ifname) != IF_OPER_UP)
+			set_operstate(port->ifname, IF_OPER_UP);
+		else
+			set_hw_all(port->ifname);
 	}
 
 	return 0;
 
 err_out:
+	set_operstate(port->ifname, IF_OPER_UP);
 	return -1;
 }
 
@@ -235,7 +239,7 @@ int dcbx_bld_tlv(struct port *newport, struct lldp_agent *agent)
 	}
 
 	if (tlvs->dcbx_st == dcbx_subtype2) {
-		tlvs->app2 = bld_dcbx2_app_tlv(tlvs, 0, &success);
+		tlvs->app2 = bld_dcbx2_app_tlv(tlvs, &success);
 		if (!success) {
 			LLDPAD_INFO("bld_dcbx2_app_tlv: failed\n");
 			goto fail_add;
@@ -395,7 +399,10 @@ struct lldp_module * dcbx_register(void)
 	int dcbx_version;
 	int i;
 
-	dcbx_default_cfg_file();
+	if (dcbx_default_cfg_file()) {
+		LLDPAD_INFO("failed to create default config file\n");
+		goto out_err;
+	}
 
 	/* Get the DCBX version */
 	if (get_dcbx_version(&dcbx_version)) {
@@ -445,7 +452,7 @@ struct lldp_module * dcbx_register(void)
 
 	for (i = 0; i < DCB_MAX_LLKTLV; i++) {
 		if (!add_llink_defaults(i)) {
-			LLDPAD_INFO("failed to add default APP data %i", i);
+			LLDPAD_INFO("failed to add default LLKTLV data %i", i);
 			goto out_err;
 		}
 	}
@@ -507,6 +514,10 @@ void dcbx_ifup(char *ifname, struct lldp_agent *agent)
 	/* Abort initialization on hardware that does not support
 	 * querying the DCB state. We assume this means the driver
 	 * does not support DCB.
+	 *
+	 * dcb_enable falls through and makes CEE active if
+	 * it is already enabled AND configuration file does not
+	 * have an entry for the dcb_enable field.
 	 */
 	if (get_hw_state(ifname, &dcb_enable) < 0)
 		return;
@@ -550,6 +561,9 @@ void dcbx_ifup(char *ifname, struct lldp_agent *agent)
 				       &adminstatus, CONFIG_TYPE_INT) ==
 				       cmd_success)
 			set_lldp_agent_admin(ifname, agent->type, adminstatus);
+
+		/* ensure advertise bits are set consistently with enabletx */
+		dont_advertise_dcbx_all(ifname, 1);
 	}
 
 	tlvs = malloc(sizeof(*tlvs));
@@ -575,7 +589,9 @@ void dcbx_ifup(char *ifname, struct lldp_agent *agent)
 	LIST_INSERT_HEAD(&dud->head, tlvs, entry);
 
 initialized:
-	tlvs->operup = false;
+	if (!port->portEnabled || port->dormantDelay)
+		tlvs->operup = false;
+
 	dcbx_add_adapter(ifname);
 
 	/* ensure advertise bits are set consistently with enabletx */
@@ -584,21 +600,21 @@ initialized:
 	exists = get_config_setting(ifname, agent->type, arg_path,
 				    &enabletx, CONFIG_TYPE_BOOL);
 
-	if (!exists || enabletx)
+	if (exists != cmd_success)
 		dont_advertise_dcbx_all(ifname, 1);
 
 	dcbx_bld_tlv(port, agent);
 
 	/* if the dcbx field is not filled in by the capabilities
 	 * query, then the kernel is older and does not support
-	 * IEEE mode, so make CEE DCBX active by default. Unless
-	 * the dcb state has been disabled from command line.
+	 * IEEE mode, lacking any specified behavior in the cfg
+	 * file DCBX is put in a default mode and will be enabled
+	 * if a peer DCBX TLV is received.
 	 */
 	get_dcb_capabilities(ifname, &dcb_support);
+	get_dcb_enable_state(ifname, &dcb_enable);
 
-	exists = get_dcb_enable_state(ifname, &dcb_enable);
-
-	if ((exists < 0 || dcb_enable) &&
+	if ((dcb_enable != LLDP_DCBX_DISABLED) &&
 	    (!dcb_support.dcbx || (gdcbx_subtype & ~MASK_DCBX_FORCE) ||
 	    (lldpad_shm_get_dcbx(ifname)))) {
 		set_dcbx_mode(tlvs->ifname,
@@ -729,44 +745,50 @@ int dcbx_rchange(struct port *port, struct lldp_agent *agent, struct unpacked_tl
 		if ((memcmp(tlv->info, &oui, DCB_OUI_LEN) != 0))
 			return SUBTYPE_INVALID;
 
-		if (dcbx->dcbx_st == dcbx_subtype2) {
-			if ((tlv->info[DCB_OUI_LEN] == dcbx_subtype2)
-				&& (agent->lldpdu & RCVD_LLDP_DCBX2_TLV)){
-				LLDPAD_INFO("Received duplicate DCBX TLVs\n");
-				return TLV_ERR;
-			}
+		if ((tlv->info[DCB_OUI_LEN] == dcbx_subtype2)
+			&& (agent->lldpdu & RCVD_LLDP_DCBX2_TLV)) {
+			LLDPAD_INFO("Received duplicate DCBX2 TLVs\n");
+			return TLV_ERR;
 		}
 		if ((tlv->info[DCB_OUI_LEN] == dcbx_subtype1)
 			&& (agent->lldpdu & RCVD_LLDP_DCBX1_TLV)) {
-			LLDPAD_INFO("Received duplicate DCBX TLVs\n");
+			LLDPAD_INFO("Received duplicate DCBX1 TLVs\n");
 			return TLV_ERR;
 		}
 
-		if ((dcbx->dcbx_st == dcbx_subtype2) &&
-			(tlv->info[DCB_OUI_LEN] == dcbx_subtype2)) {
+		/* Only store a legacy (CIN or CEE) DCBX TLV which matches
+		 * the currently configured legacy dcbx mode.
+		 * However, capture if any legacy DCBX TLVs are recieved.
+		*/
+		if (tlv->info[DCB_OUI_LEN] == dcbx_subtype2) {
+			if (dcbx->dcbx_st == dcbx_subtype2)
+				dcbx->manifest->dcbx2 = tlv;
 			agent->lldpdu |= RCVD_LLDP_DCBX2_TLV;
-			dcbx->manifest->dcbx2 = tlv;
 			dcbx->rxed_tlvs = true;
 			return TLV_OK;
 		} else if (tlv->info[DCB_OUI_LEN] == dcbx_subtype1) {
+			if (dcbx->dcbx_st == dcbx_subtype1)
+				dcbx->manifest->dcbx1 = tlv;
 			agent->lldpdu |= RCVD_LLDP_DCBX1_TLV;
-			dcbx->manifest->dcbx1 = tlv;
 			dcbx->rxed_tlvs = true;
 			return TLV_OK;
 		} else {
-			/* not a DCBX subtype we support */
 			return SUBTYPE_INVALID;
 		}
 	}
 
 	if (tlv->type == TYPE_0) {
 		int enabled;
-		int exists = get_dcb_enable_state(dcbx->ifname, &enabled);
+		int not_present = get_dcb_enable_state(dcbx->ifname, &enabled);
 
 		if (!dcbx->active && !ieee8021qaz_tlvs_rxed(dcbx->ifname) &&
-		    dcbx->rxed_tlvs &&
-		    (exists < 0 || enabled)) {
-			LLDPAD_DBG("CEE DCBX %s going ACTIVE\n", dcbx->ifname);
+		    dcbx->rxed_tlvs && (not_present || enabled)) {
+			if (dcbx->dcbx_st == dcbx_subtype2)
+				LLDPAD_DBG("CEE DCBX %s going ACTIVE\n",
+					   dcbx->ifname);
+			else if (dcbx->dcbx_st == dcbx_subtype1)
+				LLDPAD_DBG("CIN DCBX %s going ACTIVE\n",
+					   dcbx->ifname);
 			set_dcbx_mode(port->ifname,
 				      DCB_CAP_DCBX_HOST | DCB_CAP_DCBX_VER_CEE);
 			set_hw_state(port->ifname, 1);
@@ -775,11 +797,6 @@ int dcbx_rchange(struct port *port, struct lldp_agent *agent, struct unpacked_tl
 			somethingChangedLocal(port->ifname, agent->type);
 		}
 
-		/* Only process DCBXv2 or DCBXv1 but not both this
-		 * is required because processing both could be
-		 * problamatic. Specifically if the DCB attributes do
-		 * not match across versions.
-		 */
 		if (dcbx->manifest->dcbx2) {
 			res = unpack_dcbx2_tlvs(port, agent, dcbx->manifest->dcbx2);
 			if (!res) {
@@ -823,7 +840,7 @@ u8 dcbx_mibDeleteObjects(struct port *port, struct lldp_agent *agent)
 		return 0;
 
 	/* Set any stored values for this TLV to !Present */
-	if (get_peer_pg(port->ifname, &peer_pg) == dcb_success) {
+	if (get_peer_pg(port->ifname, &peer_pg) == cmd_success) {
 		if (peer_pg.protocol.TLVPresent == true) {
 			peer_pg.protocol.TLVPresent = false;
 			put_peer_pg(port->ifname, &peer_pg);
@@ -833,7 +850,7 @@ u8 dcbx_mibDeleteObjects(struct port *port, struct lldp_agent *agent)
 		return (u8)-1;
 	}
 
-	if (get_peer_pfc(port->ifname, &peer_pfc) == dcb_success) {
+	if (get_peer_pfc(port->ifname, &peer_pfc) == cmd_success) {
 		if (peer_pfc.protocol.TLVPresent == true) {
 			peer_pfc.protocol.TLVPresent = false;
 			put_peer_pfc(port->ifname, &peer_pfc);
@@ -844,20 +861,17 @@ u8 dcbx_mibDeleteObjects(struct port *port, struct lldp_agent *agent)
 	}
 
 	for (i = 0; i < DCB_MAX_APPTLV; i++) {
-		if (get_peer_app(port->ifname, i, &peer_app) ==
-			dcb_success) {
+		if (get_peer_app(port->ifname, i, &peer_app) == cmd_success) {
 			if (peer_app.protocol.TLVPresent == true) {
 				peer_app.protocol.TLVPresent = false;
 				peer_app.Length = 0;
 				put_peer_app(port->ifname, i, &peer_app);
 				DCB_SET_FLAGS(EventFlag, DCB_REMOTE_CHANGE_APPTLV(i));
 			}
-		} else {
-			return (u8)-1;
 		}
 	}
 
-	if (get_peer_llink(port->ifname, subtype, &peer_llink) == dcb_success) {
+	if (get_peer_llink(port->ifname, subtype, &peer_llink) == cmd_success) {
 		if (peer_llink.protocol.TLVPresent == true) {
 			peer_llink.protocol.TLVPresent = false;
 			put_peer_llink(port->ifname, subtype, &peer_llink);
@@ -867,8 +881,7 @@ u8 dcbx_mibDeleteObjects(struct port *port, struct lldp_agent *agent)
 		return (u8)-1;
 	}
 
-	if (get_peer_control(port->ifname, &peer_control) ==
-		dcb_success) {
+	if (get_peer_control(port->ifname, &peer_control) == cmd_success) {
 		peer_control.RxDCBTLVState = DCB_PEER_EXPIRED;
 		put_peer_control(port->ifname, &peer_control);
 	} else {

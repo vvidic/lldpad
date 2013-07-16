@@ -49,7 +49,7 @@
 #include "dcb_persist_store.h"
 #include "messages.h"
 #include "config.h"
-#include "clif_msgs.h"
+#include "lldpad_status.h"
 #include "lldp_mod.h"
 #include "event_iface.h"
 
@@ -99,7 +99,7 @@ void destroy_cfg(void)
 	config_destroy(&lldpad_cfg);
 }
 
-void scan_port(void *eloop_data, void *user_ctx)
+void scan_port(UNUSED void *eloop_data, UNUSED void *user_ctx)
 {
 	struct port *port;
 	struct if_nameindex *nameidx, *p;
@@ -150,29 +150,36 @@ void scan_port(void *eloop_data, void *user_ctx)
 	 * IF_OPER_UP, IF_OPER_DOWN or IF_OPER_DORMANT. 
 	 */
 	p = nameidx;
-	port = porthead;
 	while (p->if_index != 0) {
 		struct lldp_module *np;
 		const struct lldp_mod_ops *ops;
 		char *ifname = p->if_name;
 		struct lldp_agent *agent;
 
-		if (is_valid_lldp_device(ifname)) {
-			if (check_link_status(ifname))
-				oper_add_device(ifname);
-			else {
+		if (!is_valid_lldp_device(ifname)) {
+			p++;
+			continue;
+		}
 
-				LIST_FOREACH(agent, &port->agent_head, entry) {
-					LLDPAD_DBG("%s: calling ifdown for agent %p.\n",
-						   __func__, agent);
-					LIST_FOREACH(np, &lldp_head, lldp) {
-						ops = np->ops;
-						if (ops->lldp_mod_ifdown)
-							ops->lldp_mod_ifdown(ifname, agent);
-					}
+		port = port_find_by_name(p->if_name);
+		if (!port)
+			port = add_port(p->if_name);
+
+		if (port && check_link_status(ifname)) {
+			set_port_oper_delay(ifname);
+			oper_add_device(ifname);
+		} else if (port) {
+			LIST_FOREACH(agent, &port->agent_head, entry) {
+				LLDPAD_DBG("%s: calling ifdown for agent %p.\n",
+					   __func__, agent);
+				LIST_FOREACH(np, &lldp_head, lldp) {
+					ops = np->ops;
+					if (ops->lldp_mod_ifdown)
+						ops->lldp_mod_ifdown(ifname,
+								     agent);
 				}
-				set_lldp_port_enable(ifname, 0);
 			}
+			set_lldp_port_enable(ifname, 0);
 		}
 		p++;
 	}
@@ -363,10 +370,7 @@ void init_ports(void)
 			continue;
 		}
 
-		if (is_bond(p->if_name))
-			port = add_bond_port(p->if_name);
-		else
-			port = add_port(p->if_name);
+		port = add_port(p->if_name);
 
 		if (port == NULL) {
 			LLDPAD_ERR("%s: Error adding device %s\n",
@@ -695,7 +699,7 @@ int set_config_tlvfield(const char *ifname, int agenttype, u32 tlvid,
 }
 
 int set_config_tlvfield_str(const char *ifname, int agenttype, u32 tlvid,
-			    const char *field, const char *str, size_t size)
+			    const char *field, const char *str)
 {
 	if (!str)
 		return EINVAL;
@@ -734,10 +738,9 @@ int set_config_tlvinfo_bin(const char *ifname, int agenttype, u32 tlvid,
 }
 
 int set_config_tlvinfo_str(const char *ifname, int agenttype, u32 tlvid,
-			   char *value, size_t size)
+			   char *value)
 {
-	return set_config_tlvfield_str(ifname, agenttype, tlvid, "info",
-				       value, size);
+	return set_config_tlvfield_str(ifname, agenttype, tlvid, "info", value);
 }
 
 int set_config_tlvfield_int(const char *ifname, int agenttype, u32 tlvid,
@@ -804,9 +807,14 @@ void set_med_devtype(const char *ifname, int agenttype, int devtype)
 
 int get_med_devtype(const char *ifname, int agenttype)
 {
-	int devtype;
+	int devtype, err;
 
-	get_config_tlvfield_int(ifname, agenttype, TLVID_MED(LLDP_MED_RESERVED),
-				"devtype", &devtype);
+	err = get_config_tlvfield_int(ifname, agenttype,
+				      TLVID_MED(LLDP_MED_RESERVED),
+				      "devtype", &devtype);
+
+	if (err)
+		devtype = 0;
+
 	return devtype;
 }

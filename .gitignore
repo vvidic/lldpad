@@ -1,2 +1,12 @@
 .pc
 ylwrap
+.libs/
+.pc/
+autoscan.log
+configure.scan
+liblldp_clif.*
+m4/
+vdptest
+qbg22sim
+patches/
+ar-lib

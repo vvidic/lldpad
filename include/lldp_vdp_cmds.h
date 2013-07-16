@@ -27,7 +27,7 @@
 #define _LLDP_VDP_CMDS_H
 
 struct arg_handlers *vdp_get_arg_handlers();
-char *print_profile(char *, size_t, struct vsi_profile *);
+int vdp_clif_cmd(char *, int, char *, int);
 
 enum {
        MODE = 0,
@@ -38,7 +38,11 @@ enum {
        FORMAT,
 };
 
-#define VAL_STATION    "station"
-#define VAL_BRIDGE     "bridge"
+#define VAL_STATION	"station"
+#define VAL_BRIDGE	"bridge"
+#define ARG_VDP_MODE	"mode"
+#define ARG_VDP_ROLE	"role"
+#define VDP_PREFIX	"vdp"
+#define VDP_BUF_SIZE	256
 
 #endif

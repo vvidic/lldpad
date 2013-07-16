@@ -29,9 +29,12 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include "lldp_mod.h"
-#include "lldptool.h"
+#include "clif_msgs.h"
 #include "lldp.h"
 #include "lldp_orgspec_clif.h"
+
+#define VNAME_SIZE 32
+#define PROTOID_SIZE 256
 
 static void orgspec_print_pvid_tlv(u16 len, char *info);
 static void orgspec_print_ppvid_tlv(u16 len, char *info);
@@ -84,7 +87,7 @@ static int orgspec_print_help()
 	while (tn->type != INVALID_TLVID) {
 		if (tn->key && strlen(tn->key) && tn->name) {
 			printf("   %s", tn->key);
-			if (strlen(tn->key)+3 <= 8)
+			if (strlen(tn->key)+3 < 8)
 				printf("\t");
 			printf("\t: %s\n", tn->name);
 		}
@@ -148,7 +151,7 @@ static void orgspec_print_ppvid_tlv(u16 len, char *info)
 		printf("Unable to decode PVID flags !\n");
 		return;
 	}
-	if (flags & 2 && !(flags & 1)) {
+	if (flags & 2 && (flags & 1) != 0) {
 		printf("Error decoding ppvid, discard\n");
 		return;
 	}
@@ -157,8 +160,8 @@ static void orgspec_print_ppvid_tlv(u16 len, char *info)
 		return;
 	}
 	printf("PVID: %x,%s supported,%s enabled",
-	       ntohs(pvid), flags&1 ? "" : " not",
-	       flags & 2 ? "" : " not");
+	       ntohs(pvid), flags & 2 ? "" : " not",
+	       flags & 1 ? "" : " not");
 	printf("\n");
 }
 
@@ -166,7 +169,7 @@ static void orgspec_print_vlan_name_tlv(u16 len, char *info)
 {
 	u16 vid;
 	u8 name_len;
-	unsigned char vlan_name[32];
+	unsigned char vlan_name[VNAME_SIZE] = {0};
 
 	if (len < 4) {
 		printf("Bad VLAN Name TLV: %s\n", info);
@@ -181,7 +184,7 @@ static void orgspec_print_vlan_name_tlv(u16 len, char *info)
 	if (hexstr2bin(info + 4, &name_len, sizeof(name_len)))
 		name_len = 0;
 
-	if (!hexstr2bin(info + 6, vlan_name, name_len - 1))
+	if (!hexstr2bin(info + 6, vlan_name, name_len))
 		printf("VID %d: Name %s", ntohs(vid), vlan_name);
 
 	printf("\n");
@@ -190,10 +193,10 @@ static void orgspec_print_vlan_name_tlv(u16 len, char *info)
 static void orgspec_print_protoid_tlv(u16 len, char *info)
 {
 	u8 protoid_len;
-	unsigned char protoid[256];
+	unsigned char protoid[PROTOID_SIZE] = {0};
 	int i;
 
-	if (len < 4) {
+	if (len < 1) {
 		printf("Bad Protocol Identity TLV: %s\n", info);
 		return;
 	}
@@ -203,7 +206,7 @@ static void orgspec_print_protoid_tlv(u16 len, char *info)
 		return;
 	}
 
-	if (!hexstr2bin(info + 2, protoid, protoid_len - 1)) {
+	if (!hexstr2bin(info + 2, protoid, protoid_len)) {
 		for (i = 0; i < protoid_len; i++)
 			printf("%02x.", protoid[i]);
 	}
@@ -214,7 +217,7 @@ static void orgspec_print_vid_usage_tlv(u16 len, char *info)
 {
 	u16 vid;
 	u8 name_len;
-	unsigned char vlan_name[32];
+	unsigned char vlan_name[VNAME_SIZE] = {0};
 
 	if (len < 4) {
 		printf("Bad VLAN Name TLV: %s\n", info);
@@ -229,7 +232,7 @@ static void orgspec_print_vid_usage_tlv(u16 len, char *info)
 	if (hexstr2bin(info + 4, &name_len, sizeof(name_len)))
 		name_len = 0;
 
-	if (!hexstr2bin(info + 6, vlan_name, name_len - 1))
+	if (!hexstr2bin(info + 6, vlan_name, name_len))
 		printf("VID %d: Name %s", ntohs(vid), vlan_name);
 
 	printf("\n");

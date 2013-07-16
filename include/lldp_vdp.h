@@ -28,7 +28,7 @@
 #define _LLDP_VDP_H
 
 #include "lldp_mod.h"
-#include "ecp/ecp.h"
+#include "lldp_ecp.h"
 
 #define LLDP_MOD_VDP		(OUI_IEEE_8021Qbg + 1)
 
@@ -47,7 +47,6 @@
 #define VDP_RESPONSE_UNKNOWN		0xfe
 #define VDP_RESPONSE_NO_RESPONSE	0xff
 
-extern const char * const vsi_responses[];
 extern const char * const vsi_states[];
 
 #define VDP_FILTER_INFO_FORMAT_VID		0x1
@@ -80,13 +79,16 @@ struct mac_vlan_p {
 	u16 vlan;
 } __attribute__ ((__packed__));
 
-struct mac_vlan {
+struct mac_vlan {		/* MAC,VLAN entry anchored by profiles */
 	u8 mac[6];
 	u16 vlan;
+	u8 qos;			/* QOS field */
+	pid_t req_pid;		/* PID of requester for this profile */
+	u32 req_seq;		/* Seq # of requester for this profile */
 	LIST_ENTRY(mac_vlan) entry;
 };
 
-struct tlv_info_vdp {
+struct tlv_info_vdp {		/* VSI information in packet format */
 	u8 oui[3];
 	u8 sub;
 	u8 mode;
@@ -100,29 +102,32 @@ struct tlv_info_vdp {
 } __attribute__ ((__packed__));
 
 struct vsi_profile {
-	int mode;
-	int response;
-	u8 mgrid;
-	int id;
-	u8 version;
-	u8 instance[16];
-	u8 format;
-	u16 entries;
+	int mode;		/* VSI profile association command */
+	int response;		/* Response from switch */
+	u8 no_nlmsg;		/* Don't send netlink msg on VSI_EXIT */
+	u8 mgrid;		/* Profile mgr id */
+	int id;			/* Profile id */
+	u8 version;		/* Profile id version number */
+	u8 instance[16];	/* Profile UUID */
+	u8 format;		/* Format of MAC,VLAN list */
+	u16 entries;		/* Number of MAC,VLAN entries in macvid_head */
 	LIST_HEAD(macvid_head, mac_vlan) macvid_head;
 	struct port *port;
-	int ackTimer;
-	int ackReceived;
-	int keepaliveTimer;
-	int state;
-	int seqnr;
-	bool localChange;
-	bool remoteChange;
+	int ackTimer;		/* VDP ACK timer interval */
+	int ackReceived;	/* VDP ACK received for this profile */
+	int keepaliveTimer;	/* VDP keepalive timer interval */
+	int state;		/* State of VDP state machine for profile */
+	int seqnr;		/* Seqnr of ECP packet this profile was sent */
+	bool localChange;	/* True when state needs change */
+	bool remoteChange;	/* True when switch caused profile change */
+	bool txmit;		/* Profile transmitted */
 	LIST_ENTRY(vsi_profile) profile;
 };
 
 struct vdp_data {
 	char ifname[IFNAMSIZ];
 	u8 enabletx;
+	u8 vdpbit_on;		/* Enable VDP Protocol */
 	struct ecp ecp;
 	struct unpacked_tlv *vdp;
 	int role;
@@ -142,21 +147,24 @@ void vdp_unregister(struct lldp_module *);
 struct vdp_data *vdp_data(char *);
 struct packed_tlv *vdp_gettlv(struct vdp_data *, struct vsi_profile *);
 void vdp_vsi_sm_station(struct vsi_profile *);
-struct vsi_profile *vdp_add_profile(struct vsi_profile *);
+struct vsi_profile *vdp_add_profile(struct vdp_data *, struct vsi_profile *);
 int vdp_remove_profile(struct vsi_profile *);
 void vdp_somethingChangedLocal(struct vsi_profile *, bool);
+void vdp_update(char *, u8);
+void vdp_ifup(char *, struct lldp_agent *);
+void vdp_ifdown(char *, struct lldp_agent *);
 
 void vdp_ack_profiles(struct vdp_data *, int);
-int vdp_indicate(struct vdp_data *, struct unpacked_tlv *, int);
+void vdp_advance_sm(struct vdp_data *);
+int vdp_indicate(struct vdp_data *, struct unpacked_tlv *);
 int vdp_vsis_pending(struct vdp_data *);
 int vdp_vsis(char *);
 const char *vdp_response2str(int);
-void vdp_print_profile(struct vsi_profile *);
-void ecp_somethingChangedLocal(struct vdp_data *, bool);
-void ecp_rx_send_ack_frame(struct vdp_data *);
-int instance2str(const u8 *, char *, size_t);
+void vdp_trace_profile(struct vsi_profile *);
+struct vsi_profile *vdp_alloc_profile(void);
+void vdp_delete_profile(struct vsi_profile *);
+struct vsi_profile *vdp_find_profile(struct vdp_data *, struct vsi_profile *);
 
 #define MAC_ADDR_STRLEN		18
-#define INSTANCE_STRLEN		36
 
 #endif /* _LLDP_VDP_H */

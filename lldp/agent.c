@@ -139,14 +139,6 @@ int lldp_add_agent(const char *ifname, enum agent_type type)
 
 	lldp_init_agent(port, newagent, type);
 
-	if (get_config_setting(ifname, newagent->type, ARG_ADMINSTATUS,
-			(void *)&newagent->adminStatus, CONFIG_TYPE_INT))
-			newagent->adminStatus = disabled;
-
-	LLDPAD_DBG("%s(%i): agent->adminStatus = %s (%i).\n", __func__,
-		   __LINE__, (newagent->adminStatus == disabled) ? "disabled" : "enabled",
-		   newagent->adminStatus);
-
 	LIST_INSERT_HEAD(&port->agent_head, newagent, entry);
 
 	LLDPAD_DBG("%s: %i agents on if %s.\n", __func__, count, port->ifname);
@@ -154,7 +146,7 @@ int lldp_add_agent(const char *ifname, enum agent_type type)
 	return 0;
 }
 
-static void timer(void *eloop_data, void *user_ctx)
+static void timer(UNUSED void *eloop_data, UNUSED void *user_ctx)
 {
 	struct lldp_module *n;
 	struct lldp_agent *agent;

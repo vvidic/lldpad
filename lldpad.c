@@ -51,7 +51,10 @@
 #include "lldp_med.h"
 #include "lldp_8023.h"
 #include "lldp_evb.h"
+#include "lldp_evb22.h"
+#include "lldp_ecp22.h"
 #include "lldp_vdp.h"
+#include "lldp_vdp22.h"
 #include "lldp_8021qaz.h"
 #include "config.h"
 #include "lldpad_shm.h"
@@ -69,7 +72,10 @@ struct lldp_module *(*register_tlv_table[])(void) = {
 	med_register,
 	ieee8023_register,
 	evb_register,
+	evb22_register,
 	vdp_register,
+	vdp22_register,
+	ecp22_register,
 	ieee8021qaz_register,
 	NULL,
 };
@@ -84,7 +90,7 @@ static const char *lldpad_version =
 "\nPortions used and/or modified from:  hostapd v 0.5.7\n"
 "Copyright (c) 2004-2007, Jouni Malinen <j@w1.fi> and contributors";
 
-void init_modules(char *path)
+static void init_modules(void)
 {
 	struct lldp_module *module;
 	struct lldp_module *premod = NULL;
@@ -118,7 +124,7 @@ static void usage(void)
 {
 	fprintf(stderr,
 		"\n"
-		"usage: lldpad [-hdksv] [-f configfile]"
+		"usage: lldpad [-hdkspv] [-f configfile]"
 		"\n"
 		"options:\n"
 		"   -h  show this usage\n"
@@ -126,6 +132,7 @@ static void usage(void)
 		"   -d  run daemon in the background\n"
 		"   -k  terminate current running lldpad\n"
 		"   -s  remove lldpad state records\n"
+		"   -p  Do not create PID file\n"
 		"   -v  show version\n"
 		"   -V  set syslog level\n");
 
@@ -160,38 +167,73 @@ static void remove_all_adapters()
 	return;
 }
 
-void lldpad_reconfig(int sig, void *eloop_ctx, void *signal_ctx)
+void
+lldpad_reconfig(UNUSED int sig, UNUSED void *eloop_ctx, UNUSED void *signal_ctx)
 {
 	LLDPAD_WARN("lldpad: SIGHUP received reinit...");
 	/* Send LLDP SHUTDOWN frames and deinit modules */
 	clean_lldp_agents();
 	deinit_modules();
 	remove_all_adapters();
-	remove_all_bond_ports();
 	destroy_cfg();
 
 	/* Reinit config file and modules */
 	init_cfg();
-	init_modules("");
+	init_modules();
 	init_ports();
 
 	return;
 }
 
+struct {
+	const char *path;
+	int score;
+} oom_adjust[] = {{"/proc/self/oom_score_adj", -1000},
+		  {"/proc/self/oom_adj", -17},
+		  {NULL, 0}};
+
+/*
+ * lldp_oom_adjust: Set oom score for lldpad
+ *
+ * Note we have two interfaces depending on kernel version.
+ */
+void lldpad_oom_adjust(void)
+{
+	int i;
+
+	for (i = 0; oom_adjust[i].path; i++) {
+		FILE *oom_file = fopen(oom_adjust[i].path, "r+");
+		int err;
+
+		if (!oom_file)
+			continue;
+
+		err = fprintf(oom_file, "%d", oom_adjust[i].score);
+		fclose(oom_file);
+		if (err < 0)
+			continue;
+
+		return;
+	}
+
+	LLDPAD_DBG("lldpad: OOM adjust failed\n");
+};
+
 int main(int argc, char *argv[])
 {
 	int c;
 	struct clif_data *clifd;
-	int fd;
+	int fd = -1;
 	char buf[32];
 	int shm_remove = 0;
 	int killme = 0;
 	int print_v = 0;
+	int pid_file = 1;
 	pid_t pid;
 	int cnt;
 
 	for (;;) {
-		c = getopt(argc, argv, "dhkvsf:V:");
+		c = getopt(argc, argv, "dhkvspf:V:");
 		if (c < 0)
 			break;
 		switch (c) {
@@ -210,6 +252,9 @@ int main(int argc, char *argv[])
 			break;
 		case 's':
 			shm_remove = 1;
+			break;
+		case 'p':
+			pid_file = 0;
 			break;
 		case 'v':
 			print_v = 1;
@@ -285,26 +330,30 @@ int main(int argc, char *argv[])
 		exit (0);
 	}
 
-	fd = open(PID_FILE, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-	if (fd < 0) {
-		LLDPAD_ERR("error opening lldpad lock file");
-		exit(1);
+	if (pid_file) {
+		fd = open(PID_FILE, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+		if (fd < 0) {
+			LLDPAD_ERR("error opening lldpad lock file");
+			exit(1);
+		}
+
+		if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
+			if (errno == EWOULDBLOCK) {
+				fprintf(stderr, "lldpad is already running\n");
+				if (read(fd, buf, sizeof(buf)) > 0) {
+					fprintf(stderr, "pid of existing"
+						"lldpad is %s\n", buf);
+				}
+				LLDPAD_ERR("lldpad already running");
+			} else {
+				perror("error locking lldpad lock file");
+				LLDPAD_ERR("error locking lldpad lock file");
+			}
+			exit(1);
+		}
 	}
 
-	if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
-		if (errno == EWOULDBLOCK) {
-			fprintf(stderr, "lldpad is already running\n");
-			if (read(fd, buf, sizeof(buf)) > 0) {
-				fprintf(stderr, "pid of existing lldpad is %s\n",
-					buf);
-			}
-			LLDPAD_ERR("lldpad already running");
-		} else {
-			perror("error locking lldpad lock file");
-			LLDPAD_ERR("error locking lldpad lock file");
-		}
-		exit(1);
-	}
+	lldpad_oom_adjust();
 
 	/* initialize lldpad user data */
 	clifd = malloc(sizeof(struct clif_data));
@@ -335,34 +384,41 @@ int main(int argc, char *argv[])
 		goto out;
 	}
 
-	if (lseek(fd, 0, SEEK_SET) < 0) {
-		LLDPAD_ERR("error seeking lldpad lock file\n");
-		exit(1);
-	}
+	if (pid_file) {
+		if (lseek(fd, 0, SEEK_SET) < 0) {
+			LLDPAD_ERR("error seeking lldpad lock file\n");
+			exit(1);
+		}
 
-	memset(buf, 0, sizeof(buf));
-	sprintf(buf, "%u\n", getpid());
-	if (write(fd, buf, sizeof(buf)) < 0)
-		perror("error writing to lldpad lock file");
-	if (fsync(fd) < 0)
-		perror("error syncing lldpad lock file");
+		memset(buf, 0, sizeof(buf));
+		sprintf(buf, "%u\n", getpid());
+		if (write(fd, buf, sizeof(buf)) < 0)
+			perror("error writing to lldpad lock file");
+		if (fsync(fd) < 0)
+			perror("error syncing lldpad lock file");
+
+		close(fd);
+	}
 
 	pid = lldpad_shm_getpid();
 	if (pid < 0) {
 		LLDPAD_ERR("error getting shm pid");
-		unlink(PID_FILE);
+		if (pid_file)
+			unlink(PID_FILE);
 		exit(1);
 	} else if (pid == PID_NOT_SET) {
 		if (!lldpad_shm_setpid(getpid())) {
 			perror("lldpad_shm_setpid failed");
 			LLDPAD_ERR("lldpad_shm_setpid failed\n");
-			unlink(PID_FILE);
+			if (pid_file)
+				unlink(PID_FILE);
 			exit (1);
 		}
 	} else if (pid != DONT_KILL_PID) {
 		if (!kill(pid, 0)) {
 			LLDPAD_ERR("lldpad already running");
-			unlink(PID_FILE);
+			if (pid_file)
+				unlink(PID_FILE);
 			exit(1);
 		}
 		/* pid in shm no longer has a process, go ahead
@@ -371,7 +427,8 @@ int main(int argc, char *argv[])
 		if (!lldpad_shm_setpid(getpid())) {
 			perror("lldpad_shm_setpid failed");
 			LLDPAD_ERR("error overwriting shm pid");
-			unlink(PID_FILE);
+			if (pid_file)
+				unlink(PID_FILE);
 			exit (1);
 		}
 	}
@@ -391,7 +448,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	init_modules("");
+	init_modules();
 
 	eloop_register_signal_terminate(eloop_terminate, NULL);
 	eloop_register_signal_reconfig(lldpad_reconfig, NULL); 
@@ -414,8 +471,9 @@ int main(int argc, char *argv[])
 	if (ctrl_iface_register(clifd) < 0) {
 		if (!daemonize)
 			fprintf(stderr, "failed to register control interface\n");
-		LLDPAD_ERR("lldpad failed to start - failed to register control interface\n");
-		exit(1);
+		LLDPAD_ERR("lldpad failed to start - "
+			   "failed to register control interface\n");
+		goto out;
 	}
 
 	eloop_run();
@@ -423,14 +481,14 @@ int main(int argc, char *argv[])
 	clean_lldp_agents();
 	deinit_modules();
 	remove_all_adapters();
-	remove_all_bond_ports();
 	ctrl_iface_deinit(clifd);  /* free's clifd */
 	event_iface_deinit();
 	stop_lldp_agents();
 out:
 	destroy_cfg();
 	closelog();
-	unlink(PID_FILE);
+	if (pid_file)
+		unlink(PID_FILE);
 	eloop_destroy();
 	if (eloop_terminated())
 		exit(0);

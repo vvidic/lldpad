@@ -32,9 +32,9 @@
 #include <arpa/inet.h>
 #include "lldp.h"
 #include "lldp_mod.h"
-#include "lldptool.h"
 #include "lldp_mand.h"
 #include "lldp_mand_clif.h"
+#include "clif_msgs.h"
 
 void print_port_id(u16, char *info);
 void print_chassis_id(u16, char *info);
@@ -73,7 +73,7 @@ int mand_print_help()
 	while (tn->type != INVALID_TLVID) {
 		if (tn->key && strlen(tn->key) && tn->name) {
 			printf("   %s", tn->key);
-			if (strlen(tn->key)+3 <= 8)
+			if (strlen(tn->key)+3 < 8)
 				printf("\t");
 			printf("\t: %s\n", tn->name);
 		}
@@ -291,7 +291,7 @@ void print_port_id(u16 len, char *info)
 	}
 }
 
-void print_ttl(u16 len, char *info)
+void print_ttl(UNUSED u16 len, char *info)
 {
 	u16 ttl;
 

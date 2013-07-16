@@ -24,8 +24,10 @@
 
 *******************************************************************************/
 
-#ifndef _ECP_H
-#define _ECP_H
+#ifndef LLDP_ECP_H
+#define LLDP_ECP_H
+
+#include <linux/if_ether.h>
 
 #include "lldp_mod.h"
 #include "lldp_vdp.h"
@@ -48,6 +50,14 @@ typedef enum {
 	ECP_ACK
 } ecp_mode;
 
+struct ecp_buffer {			/* ECP payload buffer */
+	u8 frame[ETH_FRAME_LEN];	/* Payload buffer */
+	u16 frame_len;			/* # of bytes of valid data */
+	u8 state;			/* Buffer state */
+	u8 localChange;			/* Status changed */
+	u8 rcvFrame;			/* True if new frame received */
+};
+
 struct ecp {
 	struct l2_packet_data *l2;
 	int sequence;
@@ -56,9 +66,10 @@ struct ecp {
 	int ackTimer;
 	u16 lastSequence;
 	u16 seqECPDU;
-	struct agentrx rx;
-	struct agenttx tx;
+	struct ecp_buffer rx;		/* Receive buffer */
+	struct ecp_buffer tx;		/* Transmit buffer */
 	struct agentstats stats;
+	char ifname[IFNAMSIZ];		/* Interface name */
 };
 
 struct ecp_hdr {
@@ -87,18 +98,9 @@ enum {
 
 struct vdp_data;
 
-void ecp_rx_ReceiveFrame(void *, int, const u8 *, size_t);
-void ecp_rx_run_sm(struct vdp_data *);
-void ecp_print_frameout(struct vdp_data *);
-u8 ecp_txFrame(struct vdp_data *);
-void ecp_tx_run_sm(struct vdp_data *);
-bool ecp_ackTimer_expired(struct vdp_data *);
-void ecp_rx_change_state(struct vdp_data *, u8);
-int ecp_stop_ack_timer(struct vdp_data *);
-int ecp_start_ack_timer(struct vdp_data *);
-void ecp_tx_stop_ackTimer(struct vdp_data *);
-int ecp_start_localchange_timer(struct vdp_data *);
+void ecp_somethingChangedLocal(struct vdp_data *, bool);
+void ecp_rx_send_ack_frame(struct vdp_data *);
+
 int ecp_init(char *);
 int ecp_deinit(char *);
-
 #endif /* _ECP_H */

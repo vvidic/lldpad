@@ -32,7 +32,7 @@
 #include "dcb_types.h"
 
 /**
- * dcb_fixup_up2tc - resolves mismatch in number of traffic classes
+ * dcb_fixup_pg - resolves mismatch in number of traffic classes
  * @fixpg: pg attributes or resolve
  *
  * Resolve mismatch in number of traffic classes by
@@ -75,7 +75,7 @@
  *
  * Then on the second pass the rows are collapsed onto
  * the correct number of pgid values (result). Finally,
- * the new pgid, bw, and tcmap can be tabulated.
+ * the new pgid and bandwidth percents can be tabulated.
  *
  * Above example collapses pg4 onto pg1 as follows.
  *
@@ -100,7 +100,7 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 	dcb_user_priority_attribs_type * pgid_up_list[8][8] = { {0} };
 	dcb_user_priority_attribs_type * result[8][8] = { {0} };
 	dcb_user_priority_attribs_type *entry;
-	int i, j, pgid, bw, cnt, r;
+	int i, j, pgid;
 	int be, pfc, strict, cbe, cpfc, cstrict;
 	int tcbw[8] = {0};
 	bool pg_done[8] = { 0 };
@@ -116,12 +116,12 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 	pgid++;
 
 	/* If the PGIDs can be mapped onto the number of existing traffic
-	 * classes do it and return
+	 * classes do it mapping pgs 1:1 with traffic classes via bwgid.
 	 */
 	if (pgid <= fixpg->num_tcs) {
 		for (i = 0; i < MAX_USER_PRIORITIES; i++) {
-			fixpg->tx.up[i].tcmap = fixpg->tx.up[i].pgid;
-			fixpg->rx.up[i].tcmap = fixpg->rx.up[i].pgid;
+			fixpg->tx.up[i].bwgid = i;
+			fixpg->rx.up[i].bwgid = i;
 		}
 		return 0;
 	}
@@ -156,10 +156,8 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 	}
 
 	/* Require at least as many traffic classes as traffic types */
-	if (fixpg->num_tcs < (!!be + !!strict + !!pfc)) {
-		LLDPAD_WARN("DCBX: num_tcs %i!!!\n", fixpg->num_tcs);
+	if (fixpg->num_tcs < (!!be + !!strict + !!pfc))
 		return -1;
-	}
 
 	/* Map traffic class counts onto devices max number traffic classes */
 	if (strict > fixpg->num_tcs - !!be - !!pfc)
@@ -235,8 +233,6 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 
 	/* Traverse result matrix and push values onto entries */
 	for (i = 0; i < MAX_TRAFFIC_CLASS; i++) {
-		bw = cnt = 0;
-
 		/* First Pass: Calculate TC BW and set pgid */
 		for (j = 0; j < MAX_USER_PRIORITIES; j++) {
 			entry = result[i][j];
@@ -248,32 +244,20 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
 				    __func__,  j, entry->pgid, i);
 
 			fixpg->rx.up[j].pgid = i;
-			fixpg->rx.up[j].tcmap = i;
-
 			entry->pgid = i;
-			entry->tcmap = i;
-			bw += entry->percent_of_pg_cap;
-			cnt++;
 		}
+	}
 
-		bw = cnt ?  100 / cnt : 0;
-		r = 100 - (bw * cnt);
+	/* Second Pass: Map BWGs 1:1 with priority groups */
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		fixpg->tx.up[i].bwgid = i;
 
-		/* Second Pass: Distribute PG bandwidth */
-		for (j = 0; j < MAX_USER_PRIORITIES; j++) {
-			entry = result[i][j];
-
-			if (!entry)
-				continue;
-
-			if (entry->strict_priority == dcb_link) {
-				entry->percent_of_pg_cap = 0;
-				fixpg->rx.up[j].percent_of_pg_cap = 0;
-			} else {
-				entry->percent_of_pg_cap = bw + r;
-				fixpg->rx.up[j].percent_of_pg_cap = bw + r;
-				r = 0;
-			}
+		if (fixpg->tx.up[i].strict_priority == dcb_link) {
+			fixpg->tx.up[i].percent_of_pg_cap = 0;
+			fixpg->rx.up[i].percent_of_pg_cap = 0;
+		} else {
+			fixpg->tx.up[i].percent_of_pg_cap = 100;
+			fixpg->rx.up[i].percent_of_pg_cap = 100;
 		}
 	}
 
@@ -297,9 +281,9 @@ static int dcb_fixup_pg(struct pg_attribs *fixpg, struct pfc_attribs *fixpfc)
  * 4. Link strict Bandwidth Groups can only have link strict traffic classes
  *      with zero bandwidth.
  * dcb_config - Struct containing DCB settings.
- * return : dcb_result
+ * return : cmd_status
  *****************************************************************************/
-dcb_result
+cmd_status
 dcb_check_config (full_dcb_attrib_ptrs *attribs)
 {
 	pg_attribs  *pg;
@@ -309,7 +293,7 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 	u8 link_strict_pgid;
 
 	if (attribs == NULL)
-		return dcb_failed;
+		return cmd_failed;
 
 	if (attribs->pg) {
 		int err;
@@ -324,8 +308,8 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 
 		err = dcb_fixup_pg(pg, attribs->pfc);
 		if (err) {
-			LLDPAD_WARN("dcb_fixup_pg returned error %i\n", err);
-			return dcb_failed;
+			LLDPAD_DBG("dcb_fixup_pg returned error %i\n", err);
+			return cmd_failed;
 		}
 
 		/* Internally in the pg_attribs structure, a link strict PGID is 
@@ -345,7 +329,7 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 				} else if (pg->tx.up[i].pgid != link_strict_pgid) {
 					LLDPAD_INFO("Too many LSP pgid %d\n",
 						(int)pg->tx.up[i].pgid);
-					return dcb_bad_params;
+					return cmd_bad_params;
 				}
 			}
 		}
@@ -362,7 +346,7 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 					dcb_link)) {
 					LLDPAD_INFO("Invalid tx total BWG %d\n",
 							(int)tx_bw);
-					return dcb_bad_params;
+					return cmd_bad_params;
 				}
 			}
 		}
@@ -378,7 +362,7 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 				} else if (pg->rx.up[i].pgid != link_strict_pgid) {
 					LLDPAD_INFO("Too many lsp pgids %d\n",
 						    (int)pg->rx.up[i].pgid);
-					return dcb_bad_params;
+					return cmd_bad_params;
 				}
 			}
 		}
@@ -395,7 +379,7 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 					dcb_link)) {
 					LLDPAD_INFO("Invalid RX total BWG %d\n",
 							(int)rx_bw);
-					return dcb_bad_params;
+					return cmd_bad_params;
 				}
 			}
 		}
@@ -412,12 +396,12 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 			/* Transmit Check */ 
 			tx_bw = 0, tx_bw_id = 0;
 			tx_bw = (u8)(pg->tx.up[i].percent_of_pg_cap);
-			tx_bw_id = (u8)(pg->tx.up[i].pgid);
+			tx_bw_id = (u8)(pg->tx.up[i].bwgid);
 
 			if (tx_bw_id >= MAX_BW_GROUP) {
 				LLDPAD_INFO("Invalid TX BWG idx %d\n",
 					(int)tx_bw_id);
-				return  dcb_bad_params;
+				return  cmd_bad_params;
 			}
 			if (pg->tx.up[i].strict_priority == dcb_link) {
 				tx_link_strict[tx_bw_id] = true;
@@ -425,21 +409,21 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 				if (tx_bw){
 					LLDPAD_INFO("Non-zero LSP BW %d %d\n",
 						i, (int)tx_bw);
-					return dcb_bad_params;
+					return cmd_bad_params;
 				}
 			} else if (!tx_bw) {
 				LLDPAD_INFO("Zero BW on non LSP tc %i", i);
 				/* Non link strict should have non zero bandwidth*/
-				return dcb_bad_params;
+				return cmd_bad_params;
 			}
 			/* Receive Check */
 			rx_bw = 0, rx_bw_id = 0;
 			rx_bw = (u8)(pg->rx.up[i].percent_of_pg_cap);
-			rx_bw_id = (u8)(pg->rx.up[i].pgid);
+			rx_bw_id = (u8)(pg->rx.up[i].bwgid);
 
 			if (rx_bw_id >= MAX_BW_GROUP) {
 				LLDPAD_INFO("Invalid RX BW %i", rx_bw_id);
-				return dcb_bad_params;
+				return cmd_bad_params;
 			}	   
 			if (pg->rx.up[i].strict_priority == dcb_link) {
 				rx_link_strict[rx_bw_id] = true;
@@ -447,12 +431,12 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 				if (rx_bw){
 					LLDPAD_INFO("Non-zero LSP BW %d %d\n",
 							i, (int)rx_bw);
-					return dcb_bad_params;
+					return cmd_bad_params;
 				}
 			} else if (!rx_bw) {
 				LLDPAD_INFO("Zero BW on no LSP tc %i", i);
 				/* Non link strict class should have non-zero bw */
-				return dcb_bad_params; /* DCB_RX_ERR_TC_BW_ZERO; */
+				return cmd_bad_params; /* DCB_RX_ERR_TC_BW_ZERO; */
 			}
 			tx_bw_sum[tx_bw_id] = tx_bw_sum[tx_bw_id] + tx_bw;
 			rx_bw_sum[rx_bw_id] = rx_bw_sum[rx_bw_id] + rx_bw;
@@ -470,12 +454,12 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 					LLDPAD_INFO("Non-zero LSP BW %d %d\n",
 						i, (int)tx_bw_sum[i]);
 					/* Link strict group should have zero bw */
-					return dcb_bad_params;
+					return cmd_bad_params;
 				}
 			} else if (tx_bw_sum[i] != BW_PERCENT && tx_bw_sum[i] != 0) {
 				LLDPAD_INFO("Invalid BW sum on BWG %i %i",
 						i, (int)tx_bw_sum[i]);
-				return dcb_bad_params;
+				return cmd_bad_params;
 			}
 		}
 		/* Receive Check */
@@ -489,16 +473,16 @@ dcb_check_config (full_dcb_attrib_ptrs *attribs)
 					LLDPAD_INFO("Non-zero BW on LSP tc "
 						"%u %u\n", i, rx_bw_sum[i]);
 					/* Link strict group should have zero bw */
-					return dcb_bad_params;
+					return cmd_bad_params;
 				}
 			} else if (rx_bw_sum[i] != BW_PERCENT && rx_bw_sum[i] != 0) {
 				LLDPAD_INFO("Invalid BW sum on BWG %i %i",
 						i, (int)rx_bw_sum[i]);
-				return dcb_bad_params;
+				return cmd_bad_params;
 			}
 		}
 	}
-	return dcb_success;
+	return cmd_success;
 }
 
 
@@ -519,19 +503,19 @@ static u8 bw_fixup[MAX_USER_PRIORITIES] = { 0, 0, 1, 0, 0, 4, 2, 4 };
 void rebalance_uppcts(pg_attribs *pg)
 {
 	u8 uplist[MAX_USER_PRIORITIES];
-	int pgid;
+	int bwgid;
 	int num_found;
 	bool link_strict;
 	int adjust;
 	int value;
 	int i;
 
-	for (pgid = 0; pgid < MAX_BW_GROUP; pgid++) {
+	for (bwgid = 0; bwgid < MAX_BW_GROUP; bwgid++) {
 		num_found = 0;
 		link_strict = false;
 		memset(uplist, 0xff, sizeof(uplist));
 		for (i = 0; i < MAX_USER_PRIORITIES; i++) {
-			if (pg->tx.up[i].pgid == pgid) {
+			if (pg->tx.up[i].bwgid == bwgid) {
 				uplist[num_found++] = (u8)i;
 				if (pg->tx.up[i].strict_priority == dcb_link) {
 					link_strict = true;

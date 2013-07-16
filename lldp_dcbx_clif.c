@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 #include "lldp_mod.h"
 #include "lldptool.h"
+#include "clif_msgs.h"
 #include "lldp.h"
 #include "lldp_dcbx.h"
 #include "lldp_dcbx_clif.h"
@@ -51,10 +52,10 @@ static const struct lldp_mod_ops dcbx_ops_clif = {
 
 struct type_name_info dcbx_tlv_names[] = {
 	{	.type = (OUI_CEE_DCBX << 8) | 1,
-		.name = "PRE-CEE DCBX TLV", .key = "DCBXv1",
+		.name = "CIN DCBX TLV", .key = "CIN-DCBX",
 		.print_info = print_dcbx_v1, },
 	{	.type = (OUI_CEE_DCBX << 8) | 2,
-		.name = "CEE DCBX TLV", .key = "DCBX",
+		.name = "CEE DCBX TLV", .key = "CEE-DCBX",
 		.print_info = print_dcbx_v2, },
 	{	.type = INVALID_TLVID, }
 };
@@ -66,7 +67,7 @@ int dcbx_print_help()
 	while (tn->type != INVALID_TLVID) {
 		if (tn->key && strlen(tn->key) && tn->name) {
 			printf("   %s", tn->key);
-			if (strlen(tn->key)+3 <= 8)
+			if (strlen(tn->key)+3 < 8)
 				printf("\t");
 			printf("\t: %s\n", tn->name);
 		}
@@ -121,18 +122,18 @@ void print_dcbx_v1(u16 len, char *info)
 	int offset = 0;
 	u16 tlvtype;
 	u16 tlvlen;
-	u8 pgid;
-	u8 pgidmap[8];
-	u8 pgpctmap[8];
+	u8 bwgid;
+	u8 bwgidmap[8];
+	u8 bwgpctmap[8];
 	u8 strictmap[8];
-	u8 pgpct;
+	u8 bwgpct, bwpct;
 	u8 pfcmap;
 	u8 op_version, max_version;
 	u32 seqno, ackno;
 	u8 subtype;
 	int i, j, cnt;
 	int print_comma;
-	int print_pgid;
+	int print_bwgid;
 	u8 app_up_map;
 	u8 llink;
 
@@ -166,29 +167,29 @@ void print_dcbx_v1(u16 len, char *info)
 
 			printf("\t  BWG Percentages: ");
 			for (i = 0; i < 8; i++) {
-				hexstr2bin(info+offset+8+i*2, (u8 *)&pgpct,
-					   sizeof(pgpct));
-				printf("%d:%d%%%s", i, pgpct,
+				hexstr2bin(info+offset+8+i*2, (u8 *)&bwpct,
+					   sizeof(bwpct));
+				printf("%d:%d%%%s", i, bwpct,
 					(i == 7) ? "\n" : " ");
 			}
 			printf("\t  BWG Priorities: ");
 			for (i = 0; i < 8; i++) {
-				hexstr2bin(info+offset+8+16+4*i, (u8 *)&pgid,
-					   sizeof(pgid));
+				hexstr2bin(info+offset+8+16+4*i, (u8 *)&bwgid,
+					   sizeof(bwgid));
 				hexstr2bin(info+offset+8+16+4*i + 2,
-					  (u8 *)&pgpct, sizeof(pgpct));
-				pgidmap[i] = (pgid & 0xe0) >> 5;
-				strictmap[i] = (pgid & 0x18) >> 3;
-				pgpctmap[i] = pgpct;
+					  (u8 *)&bwgpct, sizeof(bwgpct));
+				bwgidmap[i] = (bwgid & 0xe0) >> 5;
+				strictmap[i] = (bwgid & 0x18) >> 3;
+				bwgpctmap[i] = bwgpct;
 			}
 
 			cnt = 0;
 			for (i = 0; i < 8; i++) {
-				print_pgid = 1;
+				print_bwgid = 1;
 				print_comma = 0;
 				for (j = 0; j < 8; j++) {
-					if (pgidmap[j] == i) {
-						if (print_pgid)
+					if (bwgidmap[j] == i) {
+						if (print_bwgid)
 							printf(" %d:[", i);
 						printf("%s%d%s-%d%%",
 							(print_comma)?", ":"",
@@ -197,19 +198,19 @@ void print_dcbx_v1(u16 len, char *info)
 							"(ls)" : (
 							(strictmap[j] == 2) ?
 							"(gs)" : ""),
-							pgpctmap[j]);
-						print_pgid = 0;
+							bwgpctmap[j]);
+						print_bwgid = 0;
 						print_comma = 1;
 						if (++cnt == 4) {
-							if (!print_pgid)
+							if (!print_bwgid)
 								printf("]");
 							printf("\n\t\t\t  ");
-							print_pgid = 1;
+							print_bwgid = 1;
 							print_comma = 0;
 						}
 					}
 				}
-				if (!print_pgid)
+				if (!print_bwgid)
 					printf("]");
 			}
 			printf("\n");

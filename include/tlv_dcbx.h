@@ -224,9 +224,6 @@ struct dcb_control_info {
 };
 #pragma pack() /*packoff*/
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 struct unpacked_tlv *bld_dcbx1_tlv(struct dcbx_tlvs *dcbx);
 struct unpacked_tlv *bld_dcbx2_tlv(struct dcbx_tlvs *dcbx);
 struct unpacked_tlv *bld_dcbx_ctrl_tlv(struct dcbx_tlvs *dcbx);
@@ -236,8 +233,7 @@ struct unpacked_tlv *bld_dcbx1_pfc_tlv(struct dcbx_tlvs *, bool *success);
 struct unpacked_tlv *bld_dcbx2_pfc_tlv(struct dcbx_tlvs *, bool *success);
 struct unpacked_tlv *bld_dcbx1_app_tlv(struct dcbx_tlvs *dcbx, u32 sub_type,
 					bool *success);
-struct unpacked_tlv *bld_dcbx2_app_tlv(struct dcbx_tlvs *, u32 sub_type,
-					bool *success);
+struct unpacked_tlv *bld_dcbx2_app_tlv(struct dcbx_tlvs *, bool *success);
 struct unpacked_tlv *bld_dcbx_llink_tlv(struct dcbx_tlvs *, u32 sub_type,
 					bool *success);
 
@@ -246,11 +242,7 @@ bool   unpack_dcbx2_tlvs(struct port *, struct lldp_agent *, struct unpacked_tlv
 bool   process_dcbx_ctrl_tlv(struct port *, struct lldp_agent *);
 bool   process_dcbx_pg_tlv(struct port *, struct lldp_agent *);
 bool   process_dcbx_pfc_tlv(struct port *, struct lldp_agent *);
-bool   process_dcbx_app_tlv(struct port *, struct lldp_agent *, int);
+bool   process_dcbx_app_tlv(struct port *, struct lldp_agent *);
 bool   process_dcbx_llink_tlv(struct port *, struct lldp_agent *);
-
-#ifdef __cplusplus
-}
-#endif /* __cplusplus */
 
 #endif
