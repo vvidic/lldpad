@@ -13,8 +13,8 @@ Build-Depends: debhelper (>= 7.0.50~),
 Standards-Version: 3.9.3
 Section: net
 Homepage: http://open-lldp.org/
-Vcs-Git: git://git.debian.org/pkg-fcoe/lldpad.git
-Vcs-Browser: http://git.debian.org/?p=pkg-fcoe/lldpad.git;a=summary
+Vcs-Git: git://anonscm.debian.org/pkg-fcoe/lldpad.git
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=pkg-fcoe/lldpad.git;a=summary
 
 Package: lldpad-dev
 Section: libdevel
