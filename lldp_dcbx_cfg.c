@@ -52,21 +52,43 @@ config_setting_add_app_default(config_setting_t *eth_setting, int subtype)
 
 	tmp_setting = config_setting_add(eth_setting, abuf,
 		CONFIG_TYPE_GROUP);
+	if (!tmp_setting)
+		goto error;
 
 	tmp2_setting = config_setting_add(tmp_setting, "app_enable",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp2_setting, 0);
+	if (!tmp2_setting || !config_setting_set_int(tmp2_setting, 1))
+		goto error;
 	tmp2_setting = config_setting_add(tmp_setting, "app_advertise",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp2_setting, 0);
+	if (!tmp2_setting || !config_setting_set_int(tmp2_setting, 1))
+		goto error;
 	tmp2_setting = config_setting_add(tmp_setting, "app_willing",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp2_setting, 0);
+	if (!tmp2_setting || !config_setting_set_int(tmp2_setting, 1))
+		goto error;
 
 	tmp2_setting = config_setting_add(tmp_setting, "app_cfg",
 		CONFIG_TYPE_STRING);
-	config_setting_set_string(tmp2_setting, "03");
+	if (!tmp2_setting)
+		goto error;
+
+	if (subtype == APP_FCOE_STYPE)
+		snprintf(abuf, sizeof(abuf), "%02x", APP_FCOE_DEFAULT_DATA);
+	else if (subtype == APP_ISCSI_STYPE)
+		snprintf(abuf, sizeof(abuf), "%02x", APP_ISCSI_DEFAULT_DATA);
+	else if (subtype == APP_FIP_STYPE)
+		snprintf(abuf, sizeof(abuf), "%02x", APP_FIP_DEFAULT_DATA);
+	else
+		snprintf(abuf, sizeof(abuf), "%02x", 0x03);
+
+	if (!config_setting_set_string(tmp2_setting, abuf))
+		goto error;
+
+	/* Success */
 	return;
+error:
+	LLDPAD_DBG("Failed setting defaults for app subtype %d", subtype);
 }
 
 static config_setting_t *construct_new_setting(char *device_name)
@@ -84,83 +106,161 @@ static config_setting_t *construct_new_setting(char *device_name)
 
 	eth_setting = config_setting_add(dcbx_setting, device_name,
 		CONFIG_TYPE_GROUP);
+	if (!eth_setting)
+		goto set_error;
+
 	tmp_setting = config_setting_add(eth_setting, "dcb_enable",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp_setting, 1);
+	if (!tmp_setting || !config_setting_set_int(tmp_setting, 1))
+		goto set_error;
+
 	tmp_setting = config_setting_add(eth_setting, "pfc_enable",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp_setting, 1);
+	if (!tmp_setting || !config_setting_set_int(tmp_setting, 1))
+		goto set_error;
+
 	tmp_setting = config_setting_add(eth_setting, "pfc_advertise",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp_setting, 1);
+	if (!tmp_setting || !config_setting_set_int(tmp_setting, 1))
+		goto set_error;
+
 	tmp_setting = config_setting_add(eth_setting, "pfc_willing",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp_setting, 1);
+	if (!tmp_setting || !config_setting_set_int(tmp_setting, 1))
+		goto set_error;
+
 	tmp_setting = config_setting_add(eth_setting, "pfc_admin_mode",
 		CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_USER_PRIORITIES; i++)
-		config_setting_set_int_elem(tmp_setting, -1, 0);
+	if (!tmp_setting)
+		goto set_error;
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		if (!config_setting_set_int_elem(tmp_setting, -1, 0))
+			goto set_error;
+	}
 
 	tmp_setting = config_setting_add(eth_setting, "pg_enable",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp_setting, 1);
+	if (!tmp_setting || !config_setting_set_int(tmp_setting, 1))
+		goto set_error;
+
 	tmp_setting = config_setting_add(eth_setting, "pg_advertise",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp_setting, 1);
+	if (!tmp_setting || !config_setting_set_int(tmp_setting, 1))
+		goto set_error;
+
 	tmp_setting = config_setting_add(eth_setting, "pg_willing",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp_setting, 1);
+	if (!tmp_setting || !config_setting_set_int(tmp_setting, 1))
+		goto set_error;
 
 	tmp_setting = config_setting_add(eth_setting, "pg_tx_bwg_alloc",
 		CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_BANDWIDTH_GROUPS; i++)
-		config_setting_set_int_elem(tmp_setting, -1, 0);
+	if (!tmp_setting)
+		goto set_error;
+	for (i = 0; i < MAX_BANDWIDTH_GROUPS; i++) {
+		if (!config_setting_set_int_elem(tmp_setting, -1, 0))
+			goto set_error;
+	}
+
 	tmp_setting = config_setting_add(eth_setting,
 		"pg_tx_traffic_attribs_type", CONFIG_TYPE_GROUP);
+	if (!tmp_setting)
+		goto set_error;
+
 	tmp2_setting = config_setting_add(tmp_setting, "traffic_class_mapping",
 		CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_USER_PRIORITIES; i++)
-		config_setting_set_int_elem(tmp2_setting, -1, i);
+	if (!tmp2_setting)
+		goto set_error;
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		if (!config_setting_set_int_elem(tmp2_setting, -1, i))
+			goto set_error;
+	}
+
 	tmp2_setting = config_setting_add(tmp_setting,
 		"bandwidth_group_mapping", CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_USER_PRIORITIES; i++)
-		config_setting_set_int_elem(tmp2_setting, -1, 0);
+	if (!tmp2_setting)
+		goto set_error;
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		if (!config_setting_set_int_elem(tmp2_setting, -1, 0))
+			goto set_error;
+	}
+
 	tmp2_setting = config_setting_add(tmp_setting,
 		"percent_of_bandwidth_group", CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_USER_PRIORITIES; i++)
-		config_setting_set_int_elem(tmp2_setting, -1, 0);
+	if (!tmp2_setting)
+		goto set_error;
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		if (!config_setting_set_int_elem(tmp2_setting, -1, 0))
+			goto set_error;
+	}
+
 	tmp2_setting = config_setting_add(tmp_setting, "strict_priority",
 		CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_USER_PRIORITIES; i++)
-		config_setting_set_int_elem(tmp2_setting, -1, 0);
+	if (!tmp2_setting)
+		goto set_error;
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		if (!config_setting_set_int_elem(tmp2_setting, -1, 0))
+			goto set_error;
+	}
 
 	tmp_setting = config_setting_add(eth_setting, "pg_rx_bwg_alloc",
 		CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_BANDWIDTH_GROUPS; i++)
-		config_setting_set_int_elem(tmp_setting, -1, 0);
+	if (!tmp_setting)
+		goto set_error;
+	for (i = 0; i < MAX_BANDWIDTH_GROUPS; i++) {
+		if (!config_setting_set_int_elem(tmp_setting, -1, 0))
+			goto set_error;
+	}
+
 	tmp_setting = config_setting_add(eth_setting,
 		"pg_rx_traffic_attribs_type", CONFIG_TYPE_GROUP);
+	if (!tmp_setting)
+		goto set_error;
+
 	tmp2_setting = config_setting_add(tmp_setting, "traffic_class_mapping",
 		CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_USER_PRIORITIES; i++)
-		config_setting_set_int_elem(tmp2_setting, -1, i);
+	if (!tmp2_setting)
+		goto set_error;
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		if (!config_setting_set_int_elem(tmp2_setting, -1, i))
+			goto set_error;
+	}
+
 	tmp2_setting = config_setting_add(tmp_setting,
 		"bandwidth_group_mapping", CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_USER_PRIORITIES; i++)
-		config_setting_set_int_elem(tmp2_setting, -1, 0);
+	if (!tmp2_setting)
+		goto set_error;
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		if (!config_setting_set_int_elem(tmp2_setting, -1, i))
+			goto set_error;
+	}
+
 	tmp2_setting = config_setting_add(tmp_setting,
 		"percent_of_bandwidth_group", CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_USER_PRIORITIES; i++)
-		config_setting_set_int_elem(tmp2_setting, -1, 0);
+	if (!tmp2_setting)
+		goto set_error;
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		if (!config_setting_set_int_elem(tmp2_setting, -1, i))
+			goto set_error;
+	}
+
 	tmp2_setting = config_setting_add(tmp_setting, "strict_priority",
 		CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_USER_PRIORITIES; i++)
-		config_setting_set_int_elem(tmp2_setting, -1, 0);
+	if (!tmp2_setting)
+		goto set_error;
+	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
+		if (!config_setting_set_int_elem(tmp2_setting, -1, i))
+			goto set_error;
+	}
 
 	tmp_setting = config_setting_add(eth_setting, "bwg_description",
 		CONFIG_TYPE_ARRAY);
-	for (i = 0; i < MAX_BANDWIDTH_GROUPS; i++)
-		config_setting_set_string_elem(tmp_setting, -1, "");
+	if (!tmp_setting)
+		goto set_error;
+	for (i = 0; i < MAX_BANDWIDTH_GROUPS; i++) {
+		if (!config_setting_set_string_elem(tmp_setting, -1, ""))
+			goto set_error;
+	}
 
 	for (i = 0; i < DCB_MAX_APPTLV; i++)
 		config_setting_add_app_default(eth_setting, i);
@@ -170,23 +270,34 @@ static config_setting_t *construct_new_setting(char *device_name)
 
 		tmp_setting = config_setting_add(eth_setting, abuf,
 			CONFIG_TYPE_GROUP);
+		if (!tmp_setting)
+			goto set_error;
 
 		tmp2_setting = config_setting_add(tmp_setting, "llink_enable",
 			CONFIG_TYPE_INT);
-		config_setting_set_int(tmp2_setting, 0);
+		if (!tmp2_setting || !config_setting_set_int(tmp2_setting, 0))
+			goto set_error;
+
 		tmp2_setting = config_setting_add(tmp_setting,
 			"llink_advertise", CONFIG_TYPE_INT);
-		config_setting_set_int(tmp2_setting, 0);
+		if (!tmp2_setting || !config_setting_set_int(tmp2_setting, 0))
+			goto set_error;
+
 		tmp2_setting = config_setting_add(tmp_setting, "llink_willing",
 			CONFIG_TYPE_INT);
-		config_setting_set_int(tmp2_setting, 0);
+		if (!tmp2_setting || !config_setting_set_int(tmp2_setting, 0))
+			goto set_error;
 	}
 
-
 	return eth_setting;
+
+set_error:
+	LLDPAD_DBG("Failed constructing new settings for config file %s",
+		    cfg_file_name);
+	return NULL;
 }
 
-void dcbx_default_cfg_file(void)
+int dcbx_default_cfg_file(void)
 {
 	config_setting_t *root_setting = NULL;
 	config_setting_t *dcbx_setting = NULL;
@@ -199,16 +310,25 @@ void dcbx_default_cfg_file(void)
 
 	/* dcbx configuration exists abort creating cfg */
 	if (!dcbx_setting) 
-		return;
+		return 0;
 
 	tmp_setting = config_setting_add(dcbx_setting, "version",
 		CONFIG_TYPE_STRING);
-	config_setting_set_string(tmp_setting, CFG_VERSION);
+	if (!tmp_setting ||
+	    !config_setting_set_string(tmp_setting, CFG_VERSION))
+		goto error;
+
 	tmp_setting = config_setting_add(dcbx_setting, "dcbx_version",
 		CONFIG_TYPE_INT);
-	config_setting_set_int(tmp_setting, dcbx_subtype2);
+	if (!tmp_setting || !config_setting_set_int(tmp_setting, dcbx_subtype2))
+		goto error;
 
 	config_write_file(&lldpad_cfg, cfg_file_name);
+
+	return 0;
+error:
+	LLDPAD_DBG("Failed to generate default config file %s", cfg_file_name);
+	return 1;
 }
 
 void cfg_fixup(config_setting_t *eth_settings)
@@ -260,24 +380,24 @@ static int _set_persistent(char *device_name, int dcb_enable,
 	/* init the internal data store for device_name */
 	if (NULL == eth_settings) {
 
-		result = dcb_success;
-		if (result == dcb_success && pg == NULL) {
+		result = cmd_success;
+		if (result == cmd_success && pg == NULL) {
 			result = get_pg(device_name, &attribs.pg);
 			pg = &attribs.pg;
 		}
-		if (result == dcb_success && pfc == NULL) {
+		if (result == cmd_success && pfc == NULL) {
 			result = get_pfc(device_name, &attribs.pfc);
 			pfc = &attribs.pfc;
 		}
-		if (result == dcb_success && app == NULL) {
+		if (result == cmd_success && app == NULL) {
 			result = get_app(device_name,app_subtype,&attribs.app[app_subtype]);
 			app = &attribs.app[app_subtype];
 		}
-		if (result == dcb_success && llink == NULL) {
+		if (result == cmd_success && llink == NULL) {
 			result = get_llink(device_name,0,&attribs.llink[0]);
 			llink = &attribs.llink[0];
 		}
-		if (result != dcb_success)	
+		if (result != cmd_success)
 			goto set_error;
 
 		eth_settings = construct_new_setting(device_name);
@@ -369,7 +489,7 @@ static int _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_get_elem(setting, i))
 					goto set_error;
 				if (!config_setting_set_int_elem(setting, i,
-					pg->tx.up[i].tcmap))
+					pg->tx.up[i].pgid))
 					goto set_error;
 			}
 
@@ -381,7 +501,7 @@ static int _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_get_elem(setting, i))
 					goto set_error;
 				if (!config_setting_set_int_elem(setting, i,
-					pg->tx.up[i].pgid))
+					pg->tx.up[i].bwgid))
 					goto set_error;
 			}
 
@@ -436,7 +556,7 @@ static int _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_get_elem(setting, i))
 					goto set_error;
 				if (!config_setting_set_int_elem(setting, i,
-					pg->rx.up[i].tcmap))
+					pg->rx.up[i].pgid))
 					goto set_error;
 			}
 
@@ -448,7 +568,7 @@ static int _set_persistent(char *device_name, int dcb_enable,
 				if (!config_setting_get_elem(setting, i))
 					goto set_error;
 				if (!config_setting_set_int_elem(setting, i,
-					pg->rx.up[i].pgid))
+					pg->rx.up[i].bwgid))
 					goto set_error;
 			}
 
@@ -578,30 +698,31 @@ static int _set_persistent(char *device_name, int dcb_enable,
 	return 0;
 
 set_error:
-	LLDPAD_ERR("update of config file failed %s", cfg_file_name);
-	return dcb_failed;
+	LLDPAD_ERR("update of config file %s failed for %s",
+		   cfg_file_name, device_name);
+	return cmd_failed;
 }
 
 static int get_default_persistent(const char *ifname, full_dcb_attribs *attribs)
 {
 	int i;
 
-	if (get_pg(DEF_CFG_STORE, &attribs->pg) != dcb_success)
+	if (get_pg(DEF_CFG_STORE, &attribs->pg) != cmd_success)
 		return 1;
 
-	if (get_pfc(DEF_CFG_STORE, &attribs->pfc) != dcb_success)
+	if (get_pfc(DEF_CFG_STORE, &attribs->pfc) != cmd_success)
 		return 1;
 
 	get_dcb_numtcs(ifname, &attribs->pg.num_tcs, &attribs->pfc.num_tcs);
 
 	for (i = 0; i < DCB_MAX_APPTLV; i++) {
-		if (get_app(DEF_CFG_STORE, i, &attribs->app[i]) != dcb_success)
+		if (get_app(DEF_CFG_STORE, i, &attribs->app[i]) != cmd_success)
 			return 1;
 	}
 
 	for (i = 0; i < DCB_MAX_LLKTLV; i++) {
 		if (get_llink(DEF_CFG_STORE, i,
-			&attribs->llink[i]) != dcb_success)
+			&attribs->llink[i]) != cmd_success)
 			return 1;
 	}
 
@@ -633,7 +754,17 @@ int save_dcbx_version(int dcbx_version)
 
 int set_persistent(char *device_name, full_dcb_attrib_ptrs *attribs)
 {
-	return _set_persistent(device_name, true, attribs->pg, attribs->pfc, 
+	int enabled = 0;
+	int not_present = get_dcb_enable_state(device_name, &enabled);
+
+	/* When the 'dcb_enable' config param does not exist put DCBX
+	 * into DEFAULT mode. This will cause DCBX to be enabled when
+	 * a DCBX TLV is received
+	 */
+	if (not_present)
+		enabled = LLDP_DCBX_DEFAULT;
+
+	return _set_persistent(device_name, enabled, attribs->pg, attribs->pfc,
 			attribs->pgid, attribs->app, attribs->app_subtype, 
 			attribs->llink, LLINK_FCOE_STYPE);
 }
@@ -647,8 +778,8 @@ int get_persistent(char *device_name, full_dcb_attribs *attribs)
 	config_setting_t *setting_array = NULL;
 	config_setting_t *setting_traffic = NULL;
 	config_setting_t *setting_value = NULL;
-	full_dcb_attrib_ptrs attrib_ptrs;
-	int result = dcb_failed, i;
+	full_dcb_attrib_ptrs attrib_ptrs = {0, 0, 0, 0, 0, 0, 0};
+	int result = cmd_failed, i;
 	int results[MAX_USER_PRIORITIES];
 	int len;
 	char abuf[32];
@@ -729,7 +860,7 @@ int get_persistent(char *device_name, full_dcb_attribs *attribs)
 		if (get_array_config(setting_traffic, "traffic_class_mapping",
 			TYPE_CHAR, &results[0]))
 			for (i = 0; i < MAX_USER_PRIORITIES; i++)
-				attribs->pg.tx.up[i].tcmap =
+				attribs->pg.tx.up[i].pgid =
 					results[i];
 		else
 			goto set_default;
@@ -738,7 +869,7 @@ int get_persistent(char *device_name, full_dcb_attribs *attribs)
 		if (get_array_config(setting_traffic, "bandwidth_group_mapping",
 			TYPE_CHAR, &results[0]))
 			for (i = 0; i < MAX_USER_PRIORITIES; i++)
-				attribs->pg.tx.up[i].pgid =
+				attribs->pg.tx.up[i].bwgid =
 					results[i];
 		else
 			goto set_default;
@@ -782,7 +913,7 @@ int get_persistent(char *device_name, full_dcb_attribs *attribs)
 		if (get_array_config(setting_traffic, "traffic_class_mapping",
 			TYPE_CHAR, &results[0]))
 			for (i = 0; i < MAX_USER_PRIORITIES; i++)
-				attribs->pg.rx.up[i].tcmap =
+				attribs->pg.rx.up[i].pgid =
 					results[i];
 		else
 			goto set_default;
@@ -791,7 +922,7 @@ int get_persistent(char *device_name, full_dcb_attribs *attribs)
 		if (get_array_config(setting_traffic, "bandwidth_group_mapping",
 			TYPE_CHAR, &results[0]))
 			for (i = 0; i < MAX_USER_PRIORITIES; i++)
-				attribs->pg.rx.up[i].pgid =
+				attribs->pg.rx.up[i].bwgid =
 					results[i];
 		else
 			goto set_default;
@@ -845,7 +976,6 @@ int get_persistent(char *device_name, full_dcb_attribs *attribs)
 			 */
 			attribs->app[i].protocol.Enable = attribs->app[0].protocol.Enable;
 			attribs->app[i].protocol.Willing = attribs->app[0].protocol.Willing;
-			attribs->app[i].protocol.Advertise = attribs->app[0].protocol.Advertise;
  			continue;
 		}
 
@@ -917,11 +1047,12 @@ int get_persistent(char *device_name, full_dcb_attribs *attribs)
 	return 0;
 
 set_default:
-	LLDPAD_WARN("Error read config file.\n");
+	LLDPAD_DBG("Error read config file.\n");
 	result = get_default_persistent(device_name, attribs);
 
 	if (!result) {
 		attrib_ptrs.pg = &attribs->pg;
+		attrib_ptrs.pfc = &attribs->pfc;
 		result = dcb_check_config(&attrib_ptrs);
 	}
 

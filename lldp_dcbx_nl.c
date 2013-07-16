@@ -32,6 +32,7 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <stdarg.h>
 #include "linux/netlink.h"
@@ -420,8 +421,14 @@ int init_drv_if(void)
 
 int deinit_drv_if(void)
 {
-	if (nl_sd) {
-		shutdown(nl_sd, 2);
+	int rc;
+
+	rc = fcntl(nl_sd, F_GETFD);
+	if (rc != -1) {
+		rc = close(nl_sd);
+		if (rc)
+			LLDPAD_ERR("Failed to close NETLINK socket (%d)\n",
+					rc);
 		nl_sd = 0;
 	}
 	return 0;
@@ -672,20 +679,21 @@ int set_hw_pg(char *ifname, pgroup_attribs *pg_data, bool oper_mode)
 
 	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
 		for (j = 0; j < MAX_TRAFFIC_CLASSES; j++) {
-			if (pg_temp->tx.up[i].tcmap == j)
+			if (pg_temp->tx.up[i].pgid == j) {
 				tc[j].up_to_tc_bitmap |= (1 << i);
+				tc[j].prio_type = pg_temp->tx.up[i].strict_priority;
+				tc[j].tc_percent = pg_temp->tx.up[i].percent_of_pg_cap;
+			}
 		}
 	}
 
 	for (i = 0; i < MAX_TRAFFIC_CLASSES; i++) {
-		tc[i].pgid = pg_temp->tx.up[i].pgid;
-		tc[i].prio_type = pg_temp->tx.up[i].strict_priority;
-		tc[i].tc_percent = pg_temp->tx.up[i].percent_of_pg_cap;
+		tc[i].bwgid = pg_temp->tx.up[i].bwgid;
 		bwg[i] = pg_temp->tx.pg_percent[i];
-		LLDPAD_DBG("%s %s: (%i) TX pgid %i up_to_tc %i "
+		LLDPAD_DBG("%s %s: (%i) TX bwgid %i up_to_tc %i "
 			   "prio %i percent %i\n",
 			    __func__, ifname, i,
-			    tc[i].pgid,
+			    tc[i].bwgid,
 			    tc[i].up_to_tc_bitmap,
 			    tc[i].prio_type,
 			    tc[i].tc_percent);
@@ -698,20 +706,21 @@ int set_hw_pg(char *ifname, pgroup_attribs *pg_data, bool oper_mode)
 
 	for (i = 0; i < MAX_USER_PRIORITIES; i++) {
 		for (j = 0; j < MAX_TRAFFIC_CLASSES; j++) {
-			if (pg_temp->tx.up[i].tcmap == j)
+			if (pg_temp->tx.up[i].pgid == j) {
 				tc[j].up_to_tc_bitmap |= (1 << i);
+				tc[j].prio_type = pg_temp->rx.up[i].strict_priority;
+				tc[j].tc_percent = pg_temp->rx.up[i].percent_of_pg_cap;
+			}
 		}
 	}
 
 	for (i = 0; i < MAX_TRAFFIC_CLASSES; i++) {
-		tc[i].pgid = pg_temp->rx.up[i].pgid;
-		tc[i].prio_type = pg_temp->rx.up[i].strict_priority;
-		tc[i].tc_percent = pg_temp->rx.up[i].percent_of_pg_cap;
+		tc[i].bwgid = pg_temp->rx.up[i].bwgid;
 		bwg[i] = pg_temp->rx.pg_percent[i];
-		LLDPAD_DBG("%s %s: (%i) RX pgid %i up_to_tc %i "
+		LLDPAD_DBG("%s %s: (%i) RX bwgid %i up_to_tc %i "
 			   "prio %i percent %i\n",
 			   __func__, ifname, i,
-			   tc[i].pgid,
+			   tc[i].bwgid,
 			   tc[i].up_to_tc_bitmap,
 			   tc[i].prio_type,
 			   tc[i].tc_percent);

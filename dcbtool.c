@@ -44,6 +44,8 @@
 #include "dcbtool.h"
 #include "version.h"
 
+#define UNUSED __attribute__((__unused__))
+
 static int show_raw;
 
 static const char *cli_version =
@@ -133,6 +135,7 @@ static const char *commands_help =
 "  'subtype' can be:\n"
 "     [0|fcoe]                  FCoE\n\n"
 "     [1|iscsi]                 iSCSI\n\n"
+"     [2|fip]                   FIP\n\n"
 "  'args' can include:\n"
 "     [e:<0|1>]                 controls feature enable\n"
 "     [a:<0|1>]                 controls feature advertise via DCBX\n"
@@ -217,7 +220,7 @@ void print_raw_message(char *msg, int print)
 		return;
 
 	if (!(print & SHOW_RAW_ONLY)) {
-		switch (msg[0]) {
+		switch (msg[MSG_TYPE]) {
 		case EVENT_MSG:
 			printf("event: ");
 			break;
@@ -243,9 +246,9 @@ int parse_print_message(char *msg, int print)
 	if (print & SHOW_RAW_ONLY)
 		return status;
 
-	if (msg[0] == CMD_RESPONSE)
+	if (msg[MSG_TYPE] == CMD_RESPONSE)
 		print_response(msg, status);
-	else if (msg[0] == EVENT_MSG)
+	else if (msg[MSG_TYPE] == EVENT_MSG)
 		print_event_msg(msg);
 
 	return status;
@@ -265,7 +268,7 @@ static void cli_close_connection(void)
 }
 
 
-static void cli_msg_cb(char *msg, size_t len)
+static void cli_msg_cb(char *msg, UNUSED size_t len)
 {
 	parse_print_message(msg, SHOW_OUTPUT | show_raw);
 }
@@ -313,27 +316,31 @@ inline int clif_command(struct clif *clif, char *cmd, int raw)
 	return _clif_command(clif, cmd, SHOW_OUTPUT | raw);
 }
 
-
-static int cli_cmd_ping(struct clif *clif, int argc, char *argv[], int raw)
+static int cli_cmd_ping(struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+			int raw)
 {
 	return clif_command(clif, "P", raw);
 }
 
-static int cli_cmd_help(struct clif *clif, int argc, char *argv[], int raw)
+static int
+cli_cmd_help(UNUSED struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+	     UNUSED int raw)
 {
 	printf("%s", commands_help);
 	return 0;
 }
 
-
-static int cli_cmd_license(struct clif *clif, int argc, char *argv[], int raw)
+static int
+cli_cmd_license(UNUSED struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+		UNUSED int raw)
 {
 	printf("%s\n\n%s\n", cli_version, cli_full_license);
 	return 0;
 }
 
-
-static int cli_cmd_quit(struct clif *clif, int argc, char *argv[], int raw)
+static int
+cli_cmd_quit(UNUSED struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+	     UNUSED int raw)
 {
 	cli_quit = 1;
 	return 0;
@@ -455,15 +462,13 @@ static void cli_interactive(int raw)
 	} while (!cli_quit);
 }
 
-
-static void cli_terminate(int sig)
+static void cli_terminate(UNUSED int sig)
 {
 	cli_close_connection();
 	exit(0);
 }
 
-
-static void cli_alarm(int sig)
+static void cli_alarm(UNUSED int sig)
 {
 	if (clif_conn && _clif_command(clif_conn, "P", SHOW_NO_OUTPUT)) {
 		printf("Connection to lldpad lost - trying to reconnect\n");

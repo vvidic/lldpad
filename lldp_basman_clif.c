@@ -32,6 +32,7 @@
 #include <arpa/inet.h>
 #include "lldp_mod.h"
 #include "lldptool.h"
+#include "clif_msgs.h"
 #include "lldp_basman.h"
 #include "lldp_basman_clif.h"
 
@@ -75,7 +76,7 @@ int basman_print_help()
 	while (tn->type != INVALID_TLVID) {
 		if (tn->key && strlen(tn->key) && tn->name) {
 			printf("   %s", tn->key);
-			if (strlen(tn->key)+3 <= 8)
+			if (strlen(tn->key)+3 < 8)
 				printf("\t");
 			printf("\t: %s\n", tn->name);
 		}
@@ -250,16 +251,16 @@ void print_mng_addr(u16 len, char *info)
 
 	switch (iftype) {
 	case IFNUM_UNKNOWN:
-		printf("Unknown interface subtype: ");
+		printf("\tUnknown interface subtype: ");
 		break;
 	case IFNUM_IFINDEX:
 		printf("\tIfindex: ");
 		break;
 	case IFNUM_SYS_PORT_NUM:
-		printf("System port number: ");
+		printf("\tSystem port number: ");
 		break;
 	default:
-		printf("Bad interface numbering subtype: ");
+		printf("\tBad interface numbering subtype: ");
 		break;
 	}
 	printf("%d\n", ifnum);
@@ -269,8 +270,12 @@ void print_mng_addr(u16 len, char *info)
 
 	if (oidlen && oidlen <= 128) {
 		memset(buf, 0, sizeof(buf));
-		hexstr2bin(info+offset, (u8 *)&buf, sizeof(buf));
-		printf("OID: %s", buf);
+		if (hexstr2bin(info+offset, (u8 *)&buf, oidlen))
+			printf("\tOID: Error parsing OID\n");
+		else
+			printf("\tOID: %s\n", buf);
+	} else if (oidlen > 128) {
+		printf("\tOID: Invalid length = %d\n", oidlen);
 	}
 }
 

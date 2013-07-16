@@ -46,6 +46,7 @@
 #include "lldp_med_clif.h"
 #include "lldp_8023_clif.h"
 #include "lldp_dcbx_clif.h"
+#include "lldp_evb22_clif.h"
 #include "lldp_evb_clif.h"
 #include "lldp_vdp_clif.h"
 #include "lldp_8021qaz_clif.h"
@@ -61,6 +62,7 @@
 #include "version.h"
 #include "lldpad.h"
 #include "lldp_util.h"
+#include "lldpad_status.h"
 
 static int show_raw;
 
@@ -155,6 +157,7 @@ static const char *commands_help =
 "  license                              show license information\n"
 "  -h|help                              show command usage information\n"
 "  -v|version                           show version\n"
+"  -p|ping                              ping lldpad and query pid of lldpad\n"
 "  -q|quit                              exit lldptool (interactive mode)\n"
 "  -S|stats                             get LLDP statistics for ifname\n"
 "  -t|get-tlv                           get TLVs from ifname\n"
@@ -175,6 +178,7 @@ struct lldp_module *(*register_tlv_table[])(void) = {
 	ieee8023_cli_register,
 	med_cli_register,
 	dcbx_cli_register,
+	evb22_cli_register,
 	evb_cli_register,
 	vdp_cli_register,
 	ieee8021qaz_cli_register,
@@ -183,7 +187,7 @@ struct lldp_module *(*register_tlv_table[])(void) = {
 	NULL,
 };
 
-void init_modules(char *path)
+static void init_modules(void)
 {
 	struct lldp_module *module;
 	struct lldp_module *premod = NULL;
@@ -246,7 +250,7 @@ void print_raw_message(char *msg, int print)
 		return;
 
 	if (!(print & SHOW_RAW_ONLY)) {
-		switch (msg[0]) {
+		switch (msg[MSG_TYPE]) {
 		case EVENT_MSG:
 			printf("event: ");
 			break;
@@ -272,10 +276,10 @@ int parse_print_message(char *msg, int print)
 	if (print & SHOW_RAW_ONLY)
 		return status;
 
-	if (msg[0] == CMD_RESPONSE)
+	if (msg[MSG_TYPE] == CMD_RESPONSE)
 		print_response(msg, status);
-	else if (msg[0] == MOD_CMD && msg[9] == EVENT_MSG)
-		print_event_msg(&msg[9]);
+	else if (msg[MSG_TYPE] == MOD_CMD && msg[MOD_MSG_TYPE] == EVENT_MSG)
+		print_event_msg(&msg[MOD_MSG_TYPE]);
 
 	return status;
 }
@@ -294,7 +298,7 @@ static void cli_close_connection(void)
 }
 
 
-static void cli_msg_cb(char *msg, size_t len)
+static void cli_msg_cb(char *msg, UNUSED size_t len)
 {
 	parse_print_message(msg, SHOW_OUTPUT | show_raw);
 }
@@ -342,21 +346,22 @@ inline int clif_command(struct clif *clif, char *cmd, int raw)
 	return _clif_command(clif, cmd, SHOW_OUTPUT | raw);
 }
 
-
-static int cli_cmd_ping(struct clif *clif, int argc, char *argv[],
-			struct cmd *command, int raw)
+static int cli_cmd_ping(struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+			UNUSED struct cmd *command, int raw)
 {
 	return clif_command(clif, "P", raw);
 }
 
-static int cli_cmd_nop(struct clif *clif, int argc, char *argv[],
-			struct cmd *command, int raw)
+static int
+cli_cmd_nop(UNUSED struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+	    UNUSED struct cmd *command, UNUSED int raw)
 {
 	return 0;
 }
 
-static int cli_cmd_help(struct clif *clif, int argc, char *argv[],
-			struct cmd *command, int raw)
+static int
+cli_cmd_help(UNUSED struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+	     UNUSED struct cmd *command, UNUSED int raw)
 {
 	struct lldp_module *np;
 
@@ -369,23 +374,25 @@ static int cli_cmd_help(struct clif *clif, int argc, char *argv[],
 	return 0;
 }
 
-
-static int cli_cmd_version(struct clif *clif, int argc, char *argv[],
-			   struct cmd *command, int raw)
+static int
+cli_cmd_version(UNUSED struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+		UNUSED struct cmd *command, UNUSED int raw)
 {
 	printf("%s\n", cli_version);
 	return 0;
 }
 
-static int cli_cmd_license(struct clif *clif, int argc, char *argv[],
-			   struct cmd *command, int raw)
+static int
+cli_cmd_license(UNUSED struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+		UNUSED struct cmd *command, UNUSED int raw)
 {
 	printf("%s\n", cli_full_license);
 	return 0;
 }
 
-static int cli_cmd_quit(struct clif *clif, int argc, char *argv[],
-			struct cmd *command, int raw)
+static int
+cli_cmd_quit(UNUSED struct clif *clif, UNUSED int argc, UNUSED char *argv[],
+	     UNUSED struct cmd *command, UNUSED int raw)
 {
 	cli_quit = 1;
 	return 0;
@@ -472,7 +479,7 @@ static int request(struct clif *clif, int argc, char *argv[])
 
 	opterr = 0;
 	for (;;) {
-		c = getopt_long(argc, argv, "Si:tTlLhcdnvrRqV:g:",
+		c = getopt_long(argc, argv, "Si:tTlLhcdnvrRpqV:g:",
 				lldptool_opts, &option_index);
 		if (c < 0)
 			break;
@@ -517,6 +524,8 @@ static int request(struct clif *clif, int argc, char *argv[])
 			if (!command.tlvid || errno || *end != '\0' ||
 			    end == optarg) {
 				command.tlvid = lookup_tlvid(optarg);
+				if (!strcasecmp("vdp", optarg))
+					command.module_id = command.tlvid;
 			}
 
 			if (command.tlvid == INVALID_TLVID) {
@@ -524,6 +533,9 @@ static int request(struct clif *clif, int argc, char *argv[])
 					optarg);
 				return -1;
 			}
+			break;
+		case 'p':
+			command.cmd = cmd_ping;
 			break;
 		case 'q':
 			command.cmd = cmd_quit;
@@ -574,6 +586,12 @@ static int request(struct clif *clif, int argc, char *argv[])
 			ret = -1;
 		}
 	}
+	/*
+	 * If -V vdp option is set together with -c option, use standard
+	 * module to retrieve data.
+	 */
+	if ((command.ops & op_config) && command.tlvid == command.module_id)
+		command.module_id = LLDP_MOD_MAND;
 
 	/* if no command was supplied via an option flag, then
 	 * the first remaining argument should be the command.
@@ -692,15 +710,13 @@ static void cli_interactive()
 	} while (!cli_quit);
 }
 
-
-static void cli_terminate(int sig)
+static void cli_terminate(UNUSED int sig)
 {
 	cli_close_connection();
 	exit(0);
 }
 
-
-static void cli_alarm(int sig)
+static void cli_alarm(UNUSED int sig)
 {
 	if (clif_conn && _clif_command(clif_conn, "P", SHOW_NO_OUTPUT)) {
 		printf("Connection to lldpad lost - trying to reconnect\n");
@@ -758,7 +774,7 @@ int main(int argc, char *argv[])
 		continue;
 	}
 
-	init_modules("");
+	init_modules();
 
 	signal(SIGINT, cli_terminate);
 	signal(SIGTERM, cli_terminate);

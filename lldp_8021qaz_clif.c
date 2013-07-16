@@ -31,7 +31,7 @@
 #include <sys/stat.h>
 #include "lldp.h"
 #include "lldp_mod.h"
-#include "lldptool.h"
+#include "clif_msgs.h"
 #include "lldp_8021qaz.h"
 #include "lldp_8021qaz_clif.h"
 
@@ -85,7 +85,7 @@ static int ieee8021qaz_print_help(void)
 	while (tn->type != INVALID_TLVID) {
 		if (tn->key && strlen(tn->key) && tn->name) {
 			printf("   %s", tn->key);
-			if (strlen(tn->key)+3 <= 8)
+			if (strlen(tn->key)+3 < 8)
 				printf("\t");
 			printf("\t: %s\n", tn->name);
 		}
@@ -114,7 +114,7 @@ void ieee8021qaz_cli_unregister(struct lldp_module *mod)
 	free(mod);
 }
 
-static void ieee8021qaz_print_etscfg_tlv(u16 len, char *info)
+static void ieee8021qaz_print_etscfg_tlv(UNUSED u16 len, char *info)
 {
 	u8 wc_maxtc;
 	u8 tc_bw[8], tsa_map[8];
@@ -173,7 +173,7 @@ static void ieee8021qaz_print_etscfg_tlv(u16 len, char *info)
 	printf("\n");
 }
 
-static void ieee8021qaz_print_etsrec_tlv(u16 len, char *info)
+static void ieee8021qaz_print_etsrec_tlv(UNUSED u16 len, char *info)
 {
 	u8 offset = 0;
 	u32 prio_map;
@@ -223,7 +223,7 @@ static void ieee8021qaz_print_etsrec_tlv(u16 len, char *info)
 	printf("\n");
 }
 
-static void ieee8021qaz_print_pfc_tlv(u16 len, char *info)
+static void ieee8021qaz_print_pfc_tlv(UNUSED u16 len, char *info)
 {
 	int i, offset = 0;
 	u8 w_mbc_cap, pfc_enable;

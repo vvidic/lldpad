@@ -114,10 +114,8 @@ int hexstr2bin(const char *hex, u8 *buf, size_t len)
 
 	for (i = 0; i < len; i++) {
 		a = hex2byte(ipos);
-		if (a < 0) {
-			printf("ipos=%2.2s, a=%x\n", ipos, a);
+		if (a < 0)
 			return -1;
-		}
 		*opos++ = a;
 		ipos += 2;
 	}
@@ -134,6 +132,22 @@ char *print_mac(char *mac, char *buf)
 		(unsigned char)*(mac + 4),
 		(unsigned char)*(mac + 5));
 	return buf;
+}
+
+static int get_ioctl_socket(void)
+{
+	static int ioctl_socket = -1;
+
+	if (ioctl_socket >= 0)
+		return ioctl_socket;
+	ioctl_socket = socket(PF_INET, SOCK_DGRAM, 0);
+	if (ioctl_socket < 0) {
+		int err = errno;
+
+		perror("socket create failed\n");
+		errno = err;
+	}
+	return ioctl_socket;
 }
 
 int is_valid_lldp_device(const char *device_name)
@@ -157,22 +171,19 @@ int is_valid_lldp_device(const char *device_name)
  */
 int is_bond(const char *ifname)
 {
-	int fd = -1;
+	int fd;
 	int rc = 0;
 	struct ifreq ifr;
 	ifbond ifb;
 
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
 		strcpy(ifr.ifr_name, ifname);
 		memset(&ifb, 0, sizeof(ifb));
 		ifr.ifr_data = (caddr_t)&ifb;
 		if (ioctl(fd, SIOCBONDINFOQUERY, &ifr) == 0)
 			rc = 1;
-		close(fd);
-	} else {
-		perror("is_bond() socket create failed");
 	}
 	return rc;
 }
@@ -220,12 +231,9 @@ int	get_src_mac_from_bond(struct port *bond_port, char *ifname, u8 *addr)
 	int found = 0;
 	int i;
 
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-
-	if (fd <= 0) {
-		perror("get_src_mac_from_bond failed");
+	fd = get_ioctl_socket();
+	if (fd < 0)
 		return 0;
-	}
 
 	memset(bond_mac, 0, sizeof(bond_mac));
 	memset(&ifr, 0, sizeof(ifr));
@@ -261,10 +269,8 @@ int	get_src_mac_from_bond(struct port *bond_port, char *ifname, u8 *addr)
 	}
 
 	/* current port is not a slave of the bond */
-	if (!found) {
-		close(fd);
+	if (!found)
 		return 0;
-	}
 
 	/* Get slave port's current perm MAC address
 	 * This will be the default return value
@@ -276,7 +282,6 @@ int	get_src_mac_from_bond(struct port *bond_port, char *ifname, u8 *addr)
 	}
 	else {
 		perror("error getting slave MAC address");
-		close(fd);
 		return 0;
 	}
 
@@ -299,8 +304,6 @@ int	get_src_mac_from_bond(struct port *bond_port, char *ifname, u8 *addr)
 		/* Use the current MAC of the port */
 		break;
 	}
-
-	close(fd);
 
 	return 1;
 }
@@ -331,40 +334,34 @@ int read_bool(const char *path)
 
 int get_ifflags(const char *ifname)
 {
-	int fd = -1;
+	int fd;
 	int flags = 0;
 	struct ifreq ifr;
 
 	/* use ioctl */	
-	fd = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
 		strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
-		if (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0) {
+		if (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0)
 			flags = ifr.ifr_flags;
-		} else {
-		}
-		close(fd);
 	}
 	return flags;
 }
 
 int get_ifpflags(const char *ifname)
 {
-	int fd = -1;
+	int fd;
 	int flags = 0;
 	struct ifreq ifr;
 
 	/* use ioctl */	
-	fd = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
 		strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
-		if (ioctl(fd, SIOCGIFPFLAGS, &ifr) == 0) {
+		if (ioctl(fd, SIOCGIFPFLAGS, &ifr) == 0)
 			flags = ifr.ifr_flags;
-		} else {
-		}
-		close(fd);
 	}
 	return flags;
 }
@@ -375,15 +372,6 @@ int get_iftype(const char *ifname)
 
 	snprintf(path, sizeof(path), "/sys/class/net/%s/type", ifname);
 	return read_int(path);
-}
-
-int get_ifindex(const char *ifname)
-{
-	char path[256];
-
-	snprintf(path, sizeof(path), "/sys/class/net/%s/ifindex", ifname);
-	return read_int(path);
-
 }
 
 int get_iffeatures(const char *ifname)
@@ -449,8 +437,8 @@ int is_slave(const char *ifmaster, const char *ifslave)
 	if (!is_mbond(ifmaster))
 		goto out_done;
 
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-	if (fd <= 0)
+	fd = get_ioctl_socket();
+	if (fd < 0)
 		goto out_done;
 
 	memset(&ifr, 0, sizeof(ifr));
@@ -458,7 +446,7 @@ int is_slave(const char *ifmaster, const char *ifslave)
 	strncpy(ifr.ifr_name, ifmaster, IFNAMSIZ);
 	ifr.ifr_data = (caddr_t)&ifb;
 	if (ioctl(fd, SIOCBONDINFOQUERY, &ifr))
-		goto out_close;
+		goto out_done;
 
 	for (i = 0; i < ifb.num_slaves; i++) {
 		memset(&ifs, 0, sizeof(ifs));
@@ -472,8 +460,6 @@ int is_slave(const char *ifmaster, const char *ifslave)
 		}
 	}
 	
-out_close:
-	close(fd);
 out_done:
 	return rc;
 }
@@ -484,13 +470,12 @@ int get_ifidx(const char *ifname)
 	int idx = 0;
 	struct ifreq ifreq;
 
-	fd = socket(AF_LOCAL, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifreq, 0, sizeof(ifreq));
 		strncpy(ifreq.ifr_name, ifname, IFNAMSIZ);
 		if (ioctl(fd, SIOCGIFINDEX, &ifreq) == 0)
 			idx = ifreq.ifr_ifindex;
-		close(fd);
 	}
 	return idx;
 }
@@ -499,8 +484,8 @@ int get_master(const char *ifname)
 {
 	int i;
 	int idx = 0;
-	int fd = -1;
-	int cnt = 0;
+	int fd;
+	int cnt;
 	struct ifreq *ifr = NULL;
 	struct ifconf ifc;
 	char ifcbuf[sizeof(struct ifreq) * 32];
@@ -509,8 +494,8 @@ int get_master(const char *ifname)
 	if (is_mbond(ifname))
 		return get_ifidx(ifname);
 
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifc, 0, sizeof(ifc));
 		memset(ifcbuf, 0, sizeof(ifcbuf));
 		ifc.ifc_buf = ifcbuf;
@@ -530,14 +515,13 @@ int get_master(const char *ifname)
 				break;
 			}
 		}
-		close(fd);
 	}
 	return idx;
 }
 
 int is_bridge(const char *ifname)
 {
-	int fd = -1;
+	int fd;
 	int rc = 0;
 	char path[256];
 	DIR *dirp;
@@ -553,8 +537,8 @@ int is_bridge(const char *ifname)
 		rc = 1;
 	} else { 
 		/* use ioctl */	
-		fd = socket(AF_LOCAL, SOCK_STREAM, 0);
-		if (fd > 0) {
+		fd = get_ioctl_socket();
+		if (fd >= 0) {
 			struct ifreq ifr;
 			struct __bridge_info bi;
 			unsigned long args[4] = { BRCTL_GET_BRIDGE_INFO, 
@@ -562,12 +546,8 @@ int is_bridge(const char *ifname)
 
 			ifr.ifr_data = (char *)args;
 			strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
-			if (ioctl(fd, SIOCDEVPRIVATE, &ifr) == 0) {
+			if (ioctl(fd, SIOCDEVPRIVATE, &ifr) == 0)
 				rc = 1;
-			}
-			close(fd);
-		} else {
-			perror("is_bridge() open socket failed");
 		}
 	}
 	return rc;
@@ -575,20 +555,17 @@ int is_bridge(const char *ifname)
 
 int is_vlan(const char *ifname)
 {
-	int fd = -1;
+	int fd;
 	int rc = 0;
 	struct vlan_ioctl_args ifv;
 
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifv, 0, sizeof(ifv));
 		ifv.cmd = GET_VLAN_REALDEV_NAME_CMD;
 		strncpy(ifv.device1, ifname, sizeof(ifv.device1));
 		if (ioctl(fd, SIOCGIFVLAN, &ifv) == 0)
 			rc = 1;
-		close(fd);
-	} else {
-		perror("is_vlan() open socket error");
 	}
 	return rc;
 }
@@ -606,19 +583,16 @@ int is_vlan_capable(const char *ifname)
 
 int is_wlan(const char *ifname)
 {
-	int fd = -1;
+	int fd;
 	int rc = 0;
 	struct iwreq iwreq;
 
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&iwreq, 0, sizeof(iwreq));
 		strncpy(iwreq.ifr_name, ifname, sizeof(iwreq.ifr_name));
 		if (ioctl(fd, SIOCGIWNAME, &iwreq) == 0)
 			rc = 1;
-		close(fd);
-	} else {
-		perror("is_wlan() open socket error");
 	}
 	return rc;
 }
@@ -646,11 +620,12 @@ int is_macvtap(const char *ifname)
 	}
 
 	nlh = malloc(NLMSG_SIZE);
-	memset(nlh, 0, NLMSG_SIZE);
 
 	if (!nlh) {
 		goto out;
 	}
+
+	memset(nlh, 0, NLMSG_SIZE);
 
 	nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
         nlh->nlmsg_type = RTM_GETLINK;
@@ -709,7 +684,7 @@ out:
 	return false;
 }
 
-int is_router(const char *ifname)
+static int is_router(void)
 {
 	int rc = 0;
 	char path[256];
@@ -725,20 +700,17 @@ int is_router(const char *ifname)
 
 int is_active(const char *ifname)
 {
-	int fd = -1;
+	int fd;
 	int rc = 0;
 	struct ifreq ifr;
 
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
 		strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 		if (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0)
 			if (ifr.ifr_flags & IFF_UP)
 				rc = 1;
-		close(fd);
-	} else {
-		perror("is_active() open socket error");
 	}
 	return rc;
 }
@@ -746,12 +718,12 @@ int is_active(const char *ifname)
 int is_autoneg_supported(const char *ifname)
 {
 	int rc = 0;
-	int fd = -1;
+	int fd;
 	struct ifreq ifr;
 	struct ethtool_cmd cmd;
 	
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.cmd = ETHTOOL_GSET;
@@ -760,9 +732,6 @@ int is_autoneg_supported(const char *ifname)
 		if (ioctl(fd, SIOCETHTOOL, &ifr) == 0)
 			if (cmd.supported & SUPPORTED_Autoneg)
 				rc = 1;
-		close(fd);
-	} else {	
-		perror("is_autoneg_supported() open socket failed");
 	}
 	return rc;
 }
@@ -770,12 +739,12 @@ int is_autoneg_supported(const char *ifname)
 int is_autoneg_enabled(const char *ifname)
 {
 	int rc = 0;
-	int fd = -1;
+	int fd;
 	struct ifreq ifr;
 	struct ethtool_cmd cmd;
 	
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.cmd = ETHTOOL_GSET;
@@ -783,9 +752,6 @@ int is_autoneg_enabled(const char *ifname)
 		strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 		if (ioctl(fd, SIOCETHTOOL, &ifr) == 0)
 			rc = cmd.autoneg;
-		close(fd);
-	} else {	
-		perror("is_autoneg_enabled() open socket failed");
 	}
 	return rc;
 }
@@ -809,13 +775,13 @@ int is_autoneg_enabled(const char *ifname)
 #define MAUCAPADV_b1000baseTFD	(1 << 15) /* 1000BASE-T full duplex mode */
 int get_maucaps(const char *ifname)
 {
-	int fd = -1;
+	int fd;
 	u16 caps = MAUCAPADV_bOther;
 	struct ifreq ifr;
 	struct ethtool_cmd cmd;
 	
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.cmd = ETHTOOL_GSET;
@@ -841,54 +807,20 @@ int get_maucaps(const char *ifname)
 			if (cmd.advertising & (ADVERTISED_Asym_Pause | ADVERTISED_Pause))
 				caps |= MAUCAPADV_bFdxBPause;
 		}
-		close(fd);
-	} else {	
-		perror("is_autoneg() open socket failed");
 	}
 	return caps;
 }
 
-/* IETF RFC 2668 dot3MauType: http://www.rfc-editor.org/rfc/rfc2668.txt */
-#define DOT3MAUTYPE_AUI 1
-#define DOT3MAUTYPE_10Base5 2
-#define DOT3MAUTYPE_Foirl 3
-#define DOT3MAUTYPE_10Base2 4
-#define DOT3MAUTYPE_10BaseT 5
-#define DOT3MAUTYPE_10BaseFP 6
-#define DOT3MAUTYPE_10BaseFB 7
-#define DOT3MAUTYPE_10BaseFL 8
-#define DOT3MAUTYPE_10Broad36 9
-#define DOT3MAUTYPE_10BaseTHD 10
-#define DOT3MAUTYPE_10BaseTFD 11
-#define DOT3MAUTYPE_10BaseFLHD 12
-#define DOT3MAUTYPE_10BaseFLFD 13
-#define DOT3MAUTYPE_100BaseT4 14
-#define DOT3MAUTYPE_100BaseTXHD 15
-#define DOT3MAUTYPE_100BaseTXFD 16
-#define DOT3MAUTYPE_100BaseFXHD 17
-#define DOT3MAUTYPE_100BaseFXFD 18
-#define DOT3MAUTYPE_100BaseT2HD 19
-#define DOT3MAUTYPE_100BaseT2FD 20
-#define DOT3MAUTYPE_1000BaseXHD 21
-#define DOT3MAUTYPE_1000BaseXFD 22
-#define DOT3MAUTYPE_1000BaseLXHD 23
-#define DOT3MAUTYPE_1000BaseLXFD 24
-#define DOT3MAUTYPE_1000BaseSXHD 25
-#define DOT3MAUTYPE_1000BaseSXFD 26
-#define DOT3MAUTYPE_1000BaseCXHD 27
-#define DOT3MAUTYPE_1000BaseCXFD 28
-#define DOT3MAUTYPE_1000BaseTHD 29
-#define DOT3MAUTYPE_1000BaseTFD 30
 int get_mautype(const char *ifname)
 {
 	int rc = 0;
-	int fd = -1;
+	int fd;
 	struct ifreq ifr;
 	struct ethtool_cmd cmd;
 	u32 speed;
 
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.cmd = ETHTOOL_GSET;
@@ -907,29 +839,22 @@ int get_mautype(const char *ifname)
 			else if (speed == SPEED_1000)
 				rc = DOT3MAUTYPE_1000BaseTFD;
 		}
-		close(fd);
-	} else {	
-		perror("is_autoneg() open socket failed");
 	}
 	return rc;
 }
 
 int get_mtu(const char *ifname)
 {
-	int fd = -1;
+	int fd;
 	int rc = 0;
 	struct ifreq ifr;
 
-	fd = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
 		strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
-		if (ioctl(fd, SIOCGIFMTU, &ifr) == 0) {
+		if (ioctl(fd, SIOCGIFMTU, &ifr) == 0)
 			rc = ifr.ifr_mtu;
-		}
-		close(fd);
-	} else {
-		perror("get_mtu() socket create failed");
 	}
 	return rc;
 }
@@ -951,22 +876,19 @@ int get_mfs(const char *ifname)
 
 int get_mac(const char *ifname, u8 mac[])
 {
-	int fd = -1;
+	int fd;
 	int rc = EINVAL;
 	struct ifreq ifr;
 
 	memset(mac, 0, 6);
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		ifr.ifr_addr.sa_family = AF_INET;
 		strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 		if (!ioctl(fd, SIOCGIFHWADDR, &ifr)) {
 			memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
 			rc = 0;
 		}
-		close(fd);
-	} else {
-		perror("get_mac() socket create failed");
 	}
 	return rc;
 }
@@ -996,7 +918,7 @@ u16 get_caps(const char *ifname)
 	if (is_bridge(ifname))
 		caps |= SYSCAP_BRIDGE;
 
-	if (is_router(ifname))
+	if (is_router())
 		caps |= SYSCAP_ROUTER;
 
 	if (is_wlan(ifname))
@@ -1022,19 +944,18 @@ u16 get_caps(const char *ifname)
 
 int get_saddr(const char *ifname, struct sockaddr_in *saddr)
 {
-	int fd = -1;
+	int fd;
 	int rc = EIO;
 	struct ifreq ifr;
 
-	fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-	if (fd > 0) {
+	fd = get_ioctl_socket();
+	if (fd >= 0) {
 		ifr.ifr_addr.sa_family = AF_INET;
 		strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 		if (ioctl(fd, SIOCGIFADDR, &ifr) == 0) {
 			memcpy(saddr, &ifr.ifr_addr, sizeof(*saddr));
 			rc = 0;
 		}
-		close(fd);
 	}
 	return rc;
 }
@@ -1049,7 +970,6 @@ int get_ipaddr(const char *ifname, struct in_addr *in)
 		memcpy(in, &sa.sin_addr, sizeof(struct in_addr));
 	return rc;
 }
-
 
 int get_ipaddrstr(const char *ifname, char *ipaddr, size_t size)
 {
@@ -1212,9 +1132,8 @@ int check_link_status(const char *ifname)
 		u32 data;
 	} linkstatus = { ETHTOOL_GLINK, 0};
 
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-
-	if (fd<=0)
+	fd = get_ioctl_socket();
+	if (fd < 0)
 		return retval;
 
 	memset(&ifr, 0, sizeof(ifr));
@@ -1223,29 +1142,48 @@ int check_link_status(const char *ifname)
 	if (ioctl(fd,SIOCETHTOOL, &ifr) == 0)
 		retval = linkstatus.data;
 
-	close(fd);
-
 	return retval;
 }
+
+#define NUM_ARGS 8
 
 int get_arg_val_list(char *ibuf, int ilen, int *ioff,
 			    char **args, char **argvals)
 {
 	u8 arglen;
 	u16 argvalue_len;
-	int arglens[8];
-	int argvallens[8];
+	int *arglens = NULL;
+	int *argvallens = NULL;
+	int *p;
 	int numargs;
 	int i;
 
 	/* parse out args and argvals */
 	for (i = 0; ilen - *ioff > 2 * (int)sizeof(arglen); i++) {
+		if (!(i % NUM_ARGS)) {
+			p = (int *) realloc(arglens,
+				(i/NUM_ARGS + 1) * NUM_ARGS * sizeof(int));
+			if (!p) {
+				free(arglens);
+				return 0;
+			} else {
+				arglens = p;
+			}
+			p = (int *) realloc(argvallens,
+				(i/NUM_ARGS + 1) * NUM_ARGS * sizeof(int));
+			if (!p) {
+				free(argvallens);
+				return 0;
+			} else {
+				argvallens = p;
+			}
+		}
 		hexstr2bin(ibuf+*ioff, &arglen, sizeof(arglen));
 		*ioff += 2 * (int)sizeof(arglen);
 		if (ilen - *ioff >= arglen) {
 			args[i] = ibuf+*ioff;
 			*ioff += arglen;
-			arglens[i] = arglen;
+			*(arglens+i) = arglen;
 
 			if (ilen - *ioff > 2 * (int)sizeof(argvalue_len)) {
 				hexstr2bin(ibuf+*ioff, (u8 *)&argvalue_len,
@@ -1255,46 +1193,65 @@ int get_arg_val_list(char *ibuf, int ilen, int *ioff,
 				if (ilen - *ioff >= argvalue_len) {
 					argvals[i] = ibuf+*ioff;
 					*ioff += argvalue_len;
-					argvallens[i] = argvalue_len;
+					*(argvallens+i) = argvalue_len;
 				}
 			} else {
+				free(arglens);
+				free(argvallens);
 				return 0;
 			}
 		} else {
+			free(arglens);
+			free(argvallens);
 			return 0;
 		}
 	}
 	numargs = i;
 	for (i = 0; i < numargs; i++) {
-		args[i][arglens[i]] = '\0';
-		argvals[i][argvallens[i]] = '\0';
+		args[i][*(arglens+i)] = '\0';
+		argvals[i][*(argvallens+i)] = '\0';
 	}
+	free(arglens);
+	free(argvallens);
 	return numargs;
 }
 
 int get_arg_list(char *ibuf, int ilen, int *ioff, char **args)
 {
 	u8 arglen;
-	int arglens[8];
+	int *arglens = NULL;
+	int *p;
 	int numargs;
 	int i;
 
 	/* parse out args */
 	for (i = 0; (ilen - *ioff > 2 * (int)sizeof(arglen)); i++) {
+		if (!(i % NUM_ARGS)) {
+			p = (int *) realloc(arglens,
+				(i/NUM_ARGS + 1) * NUM_ARGS * sizeof(int));
+			if (!p) {
+				free(arglens);
+				return 0;
+			} else {
+				arglens = p;
+			}
+		}
 		hexstr2bin(ibuf+(*ioff), &arglen, sizeof(arglen));
 		*ioff += 2*sizeof(arglen);
 		if (ilen - *ioff >= arglen) {
 			args[i] = ibuf+(*ioff);
 			*ioff += arglen;
-			arglens[i] = arglen;
+			*(arglens+i) = arglen;
 		} else {
+			free(arglens);
 			return 0;
 		}
 	}
 	numargs = i;
 
 	for (i = 0; i < numargs; i++)
-		args[i][arglens[i]] = '\0';
+		args[i][*(arglens+i)] = '\0';
 
+	free(arglens);
 	return numargs;
 }

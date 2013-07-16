@@ -39,6 +39,7 @@
 #include "libconfig.h"
 #include "config.h"
 #include "clif_msgs.h"
+#include "lldpad_status.h"
 #include "lldp/states.h"
 
 static int get_arg_tlvtxenable(struct cmd *, char *, char *, char *, int);
@@ -53,8 +54,9 @@ static struct arg_handlers arg_handlers[] = {
 	{	.arg = 0 }
 };
 
-static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf, int obuf_len)
+static int
+get_arg_tlvtxenable(struct cmd *cmd, char *arg, UNUSED char *argvalue,
+		    char *obuf, int obuf_len)
 {
 	int value;
 	char *s;
@@ -130,7 +132,7 @@ static int _set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 		    CONFIG_TYPE_BOOL))
 		return cmd_failed;
 
-	sprintf(obuf + strlen(obuf), "enableTx = %s\n", value ? "yes" : "no");
+	snprintf(obuf, obuf_len, "enableTx = %s\n", value ? "yes" : "no");
 	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;

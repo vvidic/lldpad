@@ -442,6 +442,12 @@ gp	{ if (!cmd) {
 				else
 					BEGIN(cmddone);
 				}
+<getappsubtype>:[fF][iI][pP][  \\t]		{ appsubtype = 2;
+				if (cmd == CMD_SET_CONFIG)
+					BEGIN(getappargs);
+				else
+					BEGIN(cmddone);
+				}
 
 <getappargs>appcfg:		{
 				if (got_args & GOT_APPCFG) {
@@ -483,8 +489,9 @@ gp	{ if (!cmd) {
 				BEGIN(getllargs);
 				}
 
-<getdcbargs,getpfcargs,getpgargs,getappargs,getpgdescargs>[[:alnum:][:punct:][:cntrl:]]	{ if (!badarg) badarg = strdup(yytext);
-					error = 1;
+<getdcbargs,getpfcargs,getpgargs,getappargs,getpgdescargs>[[:alnum:][:punct:][:cntrl:]]	{
+					BEGIN(cmddone);
+					yyless(0);
 					}
 
 <getup2tc>[0-7]			{ up2tc_a[up2tc_idx++] = atoi(yytext);
@@ -550,7 +557,7 @@ gp	{ if (!cmd) {
 				if (!badarg) badarg = strdup(yytext);
 				}
 
-<cmddone>[^[:blank:]]		{ if (!badarg) badarg = strdup(yytext);
+<cmddone>[^[:blank:]]+		{ if (!badarg) badarg = strdup(yytext);
 					error = 1;
 				}
 
@@ -992,6 +999,14 @@ int parse_dcb_cmd(char *buf)
 					if (!badarg)
 						badarg = strdup("invalid appcfg"
 							" length for iSCSI");
+					error = 1;
+				}
+				break;
+			case APP_FIP_STYPE:
+				if (strlen(appcfg_p) != 2) {
+					if (!badarg)
+						badarg = strdup("invalid appcfg"
+							" length for FIP");
 					error = 1;
 				}
 				break;

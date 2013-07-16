@@ -39,6 +39,7 @@
 #include "libconfig.h"
 #include "config.h"
 #include "clif_msgs.h"
+#include "lldpad_status.h"
 #include "lldp/states.h"
 
 static int get_arg_ipv4(struct cmd *, char *, char *, char *, int);
@@ -67,8 +68,9 @@ static struct arg_handlers arg_handlers[] = {
 	{	.arg = 0 }
 };
 
-static int get_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
-			       char *obuf, int obuf_len)
+static int
+get_arg_tlvtxenable(struct cmd *cmd, char *arg, UNUSED char *argvalue,
+		    char *obuf, int obuf_len)
 {
 	int value;
 	char *s;
@@ -145,7 +147,7 @@ static int _set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 		    CONFIG_TYPE_BOOL))
 		return cmd_failed;
 
-	sprintf(obuf + strlen(obuf), "enableTx = %s\n", value ? "yes" : "no");
+	snprintf(obuf, obuf_len, "enableTx = %s\n", value ? "yes" : "no");
 
 	somethingChangedLocal(cmd->ifname, cmd->type);
 
@@ -169,14 +171,14 @@ struct arg_handlers *basman_get_arg_handlers()
 	return &arg_handlers[0];
 }
 
-int get_arg_ipv4(struct cmd *cmd, char *arg, char *argvalue,
+int get_arg_ipv4(struct cmd *cmd, char *arg, UNUSED char *argvalue,
 		 char *obuf, int obuf_len)
 {
 	const char *p = NULL;
 	char arg_path[256];
 
 	if (cmd->cmd != cmd_gettlv)
-		return cmd_bad_params;
+		return cmd_invalid;
 
 	if (cmd->tlvid != MANAGEMENT_ADDRESS_TLV)
 		return cmd_not_applicable;
@@ -186,21 +188,22 @@ int get_arg_ipv4(struct cmd *cmd, char *arg, char *argvalue,
 
 	if (get_config_setting(cmd->ifname, cmd->type, arg_path, &p,
 				CONFIG_TYPE_STRING))
-		return cmd_failed;
-
-	snprintf(obuf, obuf_len, "%02zx%s%04zx%s",
-		 strlen(arg), arg, strlen(p), p);
+		snprintf(obuf, obuf_len, "%02zx%s%04d",
+			 strlen(arg), arg, 0);
+	else
+		snprintf(obuf, obuf_len, "%02zx%s%04zx%s",
+			 strlen(arg), arg, strlen(p), p);
 	return cmd_success;
 }
 
-int get_arg_ipv6(struct cmd *cmd, char *arg, char *argvalue,
+int get_arg_ipv6(struct cmd *cmd, char *arg, UNUSED char *argvalue,
 		 char *obuf, int obuf_len)
 {
 	const char *p = NULL;
 	char arg_path[256];
 
 	if (cmd->cmd != cmd_gettlv)
-		return cmd_bad_params;
+		return cmd_invalid;
 
 	if (cmd->tlvid != MANAGEMENT_ADDRESS_TLV)
 		return cmd_not_applicable;
@@ -210,10 +213,11 @@ int get_arg_ipv6(struct cmd *cmd, char *arg, char *argvalue,
 
 	if (get_config_setting(cmd->ifname, cmd->type, arg_path, &p,
 					CONFIG_TYPE_STRING))
-		return cmd_failed;
-
-	snprintf(obuf, obuf_len, "%02zx%s%04zx%s",
-		 strlen(arg), arg, strlen(p), p);
+		snprintf(obuf, obuf_len, "%02zx%s%04d",
+			 strlen(arg), arg, 0);
+	else
+		snprintf(obuf, obuf_len, "%02zx%s%04zx%s",
+			 strlen(arg), arg, strlen(p), p);
 
 	return cmd_success;
 }
@@ -242,7 +246,7 @@ int _set_arg_ipv4(struct cmd *cmd, char *arg, char *argvalue,
 		    CONFIG_TYPE_STRING))
 		return cmd_failed;
 
-	sprintf(obuf + strlen(obuf), "ipv4 = %s", argvalue);
+	snprintf(obuf, obuf_len, "ipv4 = %s\n", argvalue);
 
 	somethingChangedLocal(cmd->ifname, cmd->type);
 
@@ -285,7 +289,7 @@ int _set_arg_ipv6(struct cmd *cmd, char *arg, char *argvalue,
 		    CONFIG_TYPE_STRING))
 		return cmd_failed;
 
-	sprintf(obuf + strlen(obuf), "ipv6 = %s", argvalue);
+	snprintf(obuf, obuf_len, "ipv6 = %s\n", argvalue);
 	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;

@@ -79,8 +79,8 @@ typedef enum {
 typedef pfc_type dcb_pfc_list_type[MAX_USER_PRIORITIES];
 
 typedef struct dcb_user_priority_attribs {
-	__u8 tcmap;
 	__u8 pgid;
+	__u8 bwgid;
 	__u8 percent_of_pg_cap;
 	dcb_strict_priority_type   strict_priority;
 } dcb_user_priority_attribs_type;
@@ -132,17 +132,15 @@ typedef struct dcb_traffic_attribs {
 #define APP_STYPE_LEN			1
 #define APP_FCOE_STYPE			0
 #define APP_FCOE_STYPE_LEN		1
-#define LLINK_FCOE_STYPE		0
 #define APP_FCOE_DEFAULT_DATA		0x08 /* user priority 3 */
 #define APP_ISCSI_STYPE			1
-#define APP_ISCSI_STYPE_LEN		1  /* NOTE: FCOE & iSCSI (actually,
-					    * all application sub-types) must
-					    * have the same data length for now
-					    */
-#define APP_ISCSI_DEFAULT_DATA	      0x10
+#define APP_ISCSI_STYPE_LEN		1
+#define APP_ISCSI_DEFAULT_DATA		0x10
+#define APP_FIP_STYPE			2
+#define APP_FIP_STYPE_LEN		1
+#define APP_FIP_DEFAULT_DATA		0x08 /* no default FIP */
 
-#define DCB_MAX_APPTLV		      2  /* max APP TLV supported */
-
+#define DCB_MAX_APPTLV		      3  /* max APP TLV supported */
 
 /* Link SubTypes */
 
@@ -173,6 +171,10 @@ typedef struct dcb_traffic_attribs {
 /* APP ETH TYPE */
 #ifndef APP_FCOE_ETHTYPE
 #define APP_FCOE_ETHTYPE 0x8906
+#endif
+
+#ifndef APP_FIP_ETHTYPE
+#define APP_FIP_ETHTYPE 0x8914
 #endif
 
 /* APP PROTOCOL TYPES */
@@ -293,6 +295,7 @@ typedef struct dcbx_state {
 	__u32 AckNo;
 	bool FCoEenable;
 	bool iSCSIenable;
+	bool FIPenable;
 } dcbx_state;
 
 #endif /* DCB_CLIENT_IF_TYPES_H_ */

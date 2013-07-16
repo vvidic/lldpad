@@ -37,6 +37,7 @@
 #include "linux/rtnetlink.h"
 #include "linux/dcbnl.h"
 #include "linux/if.h"
+#include "lldp_util.h"
 #include "lldp_rtnl.h"
 #include "messages.h"
 #include "lldp.h"
@@ -44,6 +45,45 @@
 #define NLMSG(c) ((struct nlmsghdr *) (c))
 
 #define NLMSG_SIZE 1024
+
+/*
+ * Helper functions to construct a netlink message.
+ * The functions assume the nlmsghdr.nlmsg_len is set correctly.
+ */
+void mynla_nest_end(struct nlmsghdr *nlh, struct nlattr *start)
+{
+	start->nla_type |= NLA_F_NESTED;
+	start->nla_len = (void *)nlh + nlh->nlmsg_len - (void *)start;
+}
+
+struct nlattr *mynla_nest_start(struct nlmsghdr *nlh, int type)
+{
+	struct nlattr *ap = (struct nlattr *)((void *)nlh + nlh->nlmsg_len);
+
+	ap->nla_type = type;
+	nlh->nlmsg_len += NLA_HDRLEN;
+	return ap;
+}
+
+void mynla_put(struct nlmsghdr *nlh, int type, size_t len, void *data)
+{
+	struct nlattr *ap = (struct nlattr *)((void *)nlh + nlh->nlmsg_len);
+
+	ap->nla_type = type;
+	ap->nla_len = NLA_HDRLEN + len;
+	memcpy(ap + 1, data, len);
+	nlh->nlmsg_len += NLA_HDRLEN + NLA_ALIGN(len);
+}
+
+void mynla_put_u16(struct nlmsghdr *nlh, int type, __u16 data)
+{
+	mynla_put(nlh, type, sizeof data, &data);
+}
+
+void mynla_put_u32(struct nlmsghdr *nlh, int type, __u32 data)
+{
+	mynla_put(nlh, type, sizeof data, &data);
+}
 
 typedef int rtnl_handler(struct nlmsghdr *nh, void *arg);
 
@@ -55,7 +95,7 @@ typedef int rtnl_handler(struct nlmsghdr *nh, void *arg);
  * 		<0 on error
  * 		>0 when more data is expected
  */
-static int rtnl_recv(int s, rtnl_handler *fn, void *arg)
+static int rtnl_recv(int s, UNUSED rtnl_handler *fn, UNUSED void *arg)
 {
 	char buf[8192];
 	struct nlmsghdr *nh;
@@ -247,20 +287,11 @@ out:
 
 int get_operstate(char *ifname)
 {
-	int s, ifq;
-	int ifindex = 0;
-	struct ifreq ifr;
-	__u8 operstate;
+	int s;
+	int ifindex;
+	__u8 operstate = IF_OPER_UNKNOWN;
 
-	/* fill in ifr_ifindex for kernel versions that require it */
-	ifq = socket(PF_PACKET, SOCK_DGRAM, 0);
-	if (ifq < 0)
-		return ifq;
-	strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name) - 1);
-	if (ioctl(ifq, SIOCGIFINDEX, &ifr) == 0)
-		ifindex = ifr.ifr_ifindex;
-	close(ifq);
-
+	ifindex = get_ifidx(ifname);
 	s = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
 	if (s < 0)
 		return s;
@@ -286,8 +317,7 @@ int get_perm_hwaddr(const char *ifname, u8 *buf_perm, u8 *buf_san)
 		struct dcbmsg d;
 		union {
 			struct rtattr rta;
-			char attrbuf[RTA_SPACE(DCB_ATTR_IFNAME) +
-				     RTA_SPACE(DCB_ATTR_PERM_HWADDR)];
+			char attrbuf[RTA_SPACE(2 * IFNAMSIZ)];
 		} u;
 	} req = {
 		.nh = {

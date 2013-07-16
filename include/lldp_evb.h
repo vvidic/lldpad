@@ -29,22 +29,10 @@
 
 #include "lldp_mod.h"
 
-#define LLDP_MOD_EVB	OUI_IEEE_8021Qbg
+#define LLDP_MOD_EVB		OUI_IEEE_8021Qbg
 #define LLDP_OUI_SUBTYPE	{ 0x00, 0x1b, 0x3f, 0x00 }
 
-typedef enum {
-	EVB_OFFER_CAPABILITIES = 0,
-	EVB_CONFIGURE,
-	EVB_CONFIRMATION
-} evb_state;
-
-#define	EVB_RTE		13
-/* retransmission granularity (RTG) in microseconds */
-#define EVB_RTG		10
-/* retransmission multiplier (RTM) */
-#define EVB_RTM(rte)	(2<<(rte-1))
-
-struct tlv_info_evb {
+struct tlv_info_evb {	/* EVB TLV definition */
 	u8 oui[3];
 	u8 sub;
 	u8 smode;	/* supported forwarding mode */
@@ -59,10 +47,11 @@ struct tlv_info_evb {
 struct evb_data {
 	char ifname[IFNAMSIZ];
 	enum agent_type agenttype;
-	struct unpacked_tlv *evb;	/* EVB settings to be sent */
-	struct tlv_info_evb *tie;	/* currently supported */
-	struct tlv_info_evb *last;	/* last received */
-	struct tlv_info_evb *policy;	/* local policy */
+	bool txmit;			/* True when EVB transmits enabled */
+	bool vdp_start;			/* True when VDP module started */
+	struct tlv_info_evb tie;	/* Currently supported */
+	struct tlv_info_evb last;	/* Last received */
+	struct tlv_info_evb policy;	/* Local policy */
 	LIST_ENTRY(evb_data) entry;
 };
 
@@ -72,11 +61,12 @@ struct evb_user_data {
 
 struct lldp_module *evb_register(void);
 void evb_unregister(struct lldp_module *);
-struct packed_tlv *evb_gettlv(struct port *, struct lldp_agent *);
-void evb_ifdown(char *, struct lldp_agent *);
-void evb_ifup(char *, struct lldp_agent *);
-struct evb_data *evb_data(char *, enum agent_type);
 
-int evb_check_and_fill(struct evb_data *, struct tlv_info_evb *);
+u8 evb_conf_fmode(char *, enum agent_type);
+u8 evb_conf_capa(char *, enum agent_type);
+u8 evb_conf_rte(char *, enum agent_type);
+u16 evb_conf_vsis(char *, enum agent_type);
+int evb_conf_enabletx(char *, enum agent_type);
+struct evb_data *evb_data(char *, enum agent_type);
 
 #endif /* _LLDP_EVB_H */

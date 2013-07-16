@@ -75,7 +75,7 @@ bool mibConstrInfoLLDPDU(struct port *port, struct lldp_agent *agent)
 
 		ptlv = np->ops->lldp_mod_gettlv(port, agent);
 		if (ptlv) {
-			if ((ptlv->size+fb_offset) > ETH_MAX_DATA_LEN)
+			if ((ptlv->size+fb_offset) > ETH_DATA_LEN)
 				goto error;
 			memcpy(agent->tx.frameout+fb_offset,
 			       ptlv->tlv, ptlv->size);
@@ -87,7 +87,7 @@ bool mibConstrInfoLLDPDU(struct port *port, struct lldp_agent *agent)
 
 	/* The End TLV marks the end of the LLDP PDU */
 	ptlv = pack_end_tlv();
-	if (!ptlv || ((ptlv->size + fb_offset) > ETH_MAX_DATA_LEN))
+	if (!ptlv || ((ptlv->size + fb_offset) > ETH_DATA_LEN))
 		goto error;
 	memcpy(agent->tx.frameout + fb_offset, ptlv->tlv, ptlv->size);
 	datasize += ptlv->size;
@@ -95,7 +95,7 @@ bool mibConstrInfoLLDPDU(struct port *port, struct lldp_agent *agent)
 	ptlv =  free_pkd_tlv(ptlv);
 
 	if (datasize < ETH_MIN_DATA_LEN)
-		agent->tx.sizeout = ETH_MIN_PKT_LEN;
+		agent->tx.sizeout = ETH_ZLEN;
 	else
 		agent->tx.sizeout = fb_offset;
 
@@ -191,7 +191,7 @@ bool mibConstrShutdownLLDPDU(struct port *port, struct lldp_agent *agent)
 		goto error;
 	ptlv = np->ops->lldp_mod_gettlv(port, agent);
 	if (ptlv) {
-		if ((ptlv->size + fb_offset) > ETH_MAX_DATA_LEN)
+		if ((ptlv->size + fb_offset) > ETH_DATA_LEN)
 			goto error;
 		/* set the TTL to be 0 TTL TLV */
 		memset(&ptlv->tlv[ptlv->size - 2], 0, 2);
@@ -203,7 +203,7 @@ bool mibConstrShutdownLLDPDU(struct port *port, struct lldp_agent *agent)
 
 	/* The End TLV marks the end of the LLDP PDU */
 	ptlv = pack_end_tlv();
-	if (!ptlv || ((ptlv->size + fb_offset) > ETH_MAX_DATA_LEN))
+	if (!ptlv || ((ptlv->size + fb_offset) > ETH_DATA_LEN))
 		goto error;
 	memcpy(agent->tx.frameout + fb_offset, ptlv->tlv, ptlv->size);
 	datasize += ptlv->size;
@@ -211,7 +211,7 @@ bool mibConstrShutdownLLDPDU(struct port *port, struct lldp_agent *agent)
 	ptlv = free_pkd_tlv(ptlv);
 
 	if (datasize < ETH_MIN_DATA_LEN)
-		agent->tx.sizeout = ETH_MIN_PKT_LEN;
+		agent->tx.sizeout = ETH_ZLEN;
 	else
 		agent->tx.sizeout = fb_offset;
 	return true;
@@ -227,9 +227,7 @@ error:
 
 u8 txFrame(struct port *port, struct lldp_agent *agent)
 {
-	int status = 0;
-
-	status = l2_packet_send(port->l2, agent->mac_addr,
+	l2_packet_send(port->l2, agent->mac_addr,
 		htons(ETH_P_LLDP), agent->tx.frameout, agent->tx.sizeout);
 
 	agent->stats.statsFramesOutTotal++;
@@ -305,7 +303,7 @@ bool set_tx_state(struct port *port, struct lldp_agent *agent)
 	}
 }
 
-void process_tx_idle(struct lldp_agent *agent)
+void process_tx_idle(UNUSED struct lldp_agent *agent)
 {
 	return;
 }

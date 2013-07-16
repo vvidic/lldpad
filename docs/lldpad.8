@@ -4,7 +4,7 @@
 .\"
 .\" * Other names and brands may be claimed as the property of others.
 .\"
-.TH lldpad 8 "November 2, 2011"
+.TH lldpad 8 "March 23, 2012"
 .SH NAME
 lldpad \- Link Layer Discovery Protocol (LLDP) agent daemon
 .SH SYNOPSIS
@@ -13,6 +13,7 @@ lldpad \- Link Layer Discovery Protocol (LLDP) agent daemon
 .B [-V]
 .B [-d]
 .B [-k]
+.B [-p]
 .B [-s]
 .BI "[-f" " filename" "]"
 .SH DESCRIPTION
@@ -81,10 +82,12 @@ version 2 - also known as CEE DCBX
 IEEE DCBX
 See the IEEE 802.1Qaz-2011 specification for details.
 .PP
-IEEE DCBX is the default DCBX mode for a DCB capable interface so the default and configured IEEE DCBX TLV's will be
-transmitted when the interface comes up.  If the remote LLDP agent does not transmit any IEEE DCBX TLV's and does
-transmit a legacy DCBX
-(CEE or CIN) TLV, then the DCBX mode will drop back to the locally configured legacy DCBX mode.  It will not transition
+IEEE DCBX is the default DCBX mode for a DCB capable interface so the default and configured IEEE DCBX TLVs will be
+transmitted when the interface comes up.
+.B lldpad
+can be globally configured to support one of the legacy DCBX versions (CIN or CEE).  If the remote LLDP agent does not
+transmit any IEEE DCBX TLVs and does transmit a legacy DCBX TLV which matches the configured legacy DCBX version, then the
+DCBX mode will drop back to legacy DCBX mode.  It will not transition
 back to IEEE DCBX mode until the next link reset.  If 
 .B lldpad
 has dropped back to legacy DCBX mode for a given interface and the daemon is stopped and restarted, the
@@ -143,11 +146,34 @@ invocations of lldpad -k will not terminate lldpad.
 .TP
 .B \-s
 remove lldpad state records from shared memory
+.TP
+.B \-p
+do not create PID file /var/run/lldpad.pid on startup
 .PP
+
+.SH NOTE
+On termination, lldpad does not undo any of the configurations that
+it has set. This approach minimizes the risk of restarting the daemon
+to perform a software update, or of having storage issues during
+shutdown. Ongoing operation of network interfaces that had been
+controlled by lldpad may result in unexpected behavior.
+
+.SH SEE ALSO
+.BR dcbtool (8),
+.BR lldptool (8),
+.BR lldptool-dcbx (8),
+.BR lldptool-ets (8),
+.BR lldptool-pfc (8),
+.BR lldptool-app (8),
+.BR lldptool-med (8),
+.BR lldptool-vdp (8),
+.BR lldptool-evb (8)
+.br
+
 .SH COPYRIGHT
 lldpad - LLDP agent daemon with DCBX support
 .br
-Copyright(c) 2007-2011 Intel Corporation.
+Copyright(c) 2007-2012 Intel Corporation.
 .BR
 Portions of lldpad  are based on:
 .IP hostapd-0.5.7

@@ -57,23 +57,19 @@ void rxInitializeLLDP(struct port *port, struct lldp_agent *agent)
 	return;
 }
 
-void rxReceiveFrame(void *ctx, int ifindex, const u8 *buf, size_t len)
+void rxReceiveFrame(void *ctx, UNUSED int ifindex, const u8 *buf, size_t len)
 {
 	struct port * port;
 	struct lldp_agent *agent;
 	u8  frame_error = 0;
 	struct l2_ethhdr *hdr;
 	struct l2_ethhdr example_hdr,*ex;
-	char msg[2] = "";
 
 	/* Drop and ignore zero length frames */
 	if (!len)
 		return;
 
 	port = (struct port *)ctx;
-
-	snprintf(msg, sizeof(msg), "%i", LLDP_RCHANGE);
-	send_event(MSG_EVENT, LLDP_MOD_MAND, msg);
 
 	/* walk through the list of agents for this interface and see if we
 	 * can find a matching agent */
@@ -433,7 +429,6 @@ void run_rx_sm(struct port *port, struct lldp_agent *agent)
 	do {
 		switch(agent->rx.state) {
 		case LLDP_WAIT_PORT_OPERATIONAL:
-			process_wait_port_operational(port);
 			break;
 		case DELETE_AGED_INFO:
 			process_delete_aged_info(port, agent);
@@ -520,11 +515,6 @@ bool set_rx_state(struct port *port, struct lldp_agent *agent)
 		LLDPAD_DBG("ERROR: The RX State Machine is broken!\n");
 		return false;
 	}
-}
-
-void process_wait_port_operational(struct port *port)
-{
-	return;
 }
 
 void process_delete_aged_info(struct port *port, struct lldp_agent *agent)

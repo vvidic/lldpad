@@ -34,18 +34,18 @@
 #define DCB_APP_DRV_IF_SUPPORTED
 #endif
 
-#ifdef HEXDUMP
+static int hexdump;
+
 static void hexprint(char *b, int len)
 {
 	int i;
-	
+
 	for (i = 0; i < len; i++) {
 		if (i%16 == 0) printf("%s\t", i?"\n":"");
 		printf("%02x ", (unsigned char)*(b + i));
 	}
 	printf("\n\n");
 }
-#endif
 
 #define NLMSG_TAIL(nmsg) \
 	((struct rtattr *) (((void *) (nmsg)) + NLMSG_ALIGN((nmsg)->nlmsg_len)))
@@ -59,22 +59,22 @@ static int init_socket(void)
 	sd = socket(PF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
 	if (sd < 0)
 		return sd;
-  
+
 	if (setsockopt(sd, SOL_SOCKET, SO_RCVBUF, &rcv_size, sizeof(int)) < 0) {
 		close(sd);
 		return -EIO;
 	}
-  
+
 	memset((void *)&snl, 0, sizeof(struct sockaddr_nl));
-	snl.nl_family = AF_NETLINK;       
-	snl.nl_pid = getpid(); 
+	snl.nl_family = AF_NETLINK;
+	snl.nl_pid = getpid();
 	/* snl.nl_groups = RTMGRP_LINK; */
-  
+
 	if (bind(sd, (struct sockaddr *)&snl, sizeof(struct sockaddr_nl)) < 0) {
 		close(sd);
 		return -EIO;
 	}
-  
+
 	return sd;
 }
 
@@ -169,7 +169,7 @@ int parse_rtattr(struct rtattr *tb[], int max, struct rtattr *rta, int len)
 	(parse_rtattr((tb), (max), RTA_DATA(rta), RTA_PAYLOAD(rta)))
 
 static struct rtattr *add_rta(struct nlmsghdr *nlh, __u16 rta_type,
-                              void *attr, __u16 rta_len)
+			      void *attr, __u16 rta_len)
 {
 	struct rtattr *rta;
 
@@ -191,12 +191,12 @@ static int send_msg(struct nlmsghdr *nlh)
 
 	memset(&nladdr, 0, sizeof(nladdr));
 	nladdr.nl_family = AF_NETLINK;
-	
+
 	do {
-#ifdef HEXDUMP
-		printf("SENT A MESSAGE: %d\n", len);
-		hexprint((char *)nlh, nlh->nlmsg_len);
-#endif
+		if (hexdump) {
+			printf("SENT A MESSAGE: %d\n", len);
+			hexprint((char *)nlh, nlh->nlmsg_len);
+		}
 		r = sendto(nl_sd, buf, len, 0, (struct sockaddr *)&nladdr,
 			sizeof(nladdr));
 	} while (r < 0 && errno == EINTR);
@@ -220,21 +220,30 @@ static struct nlmsghdr *get_msg(void)
 	memset(nlh, 0, MAX_MSG_SIZE);
 
 	len = recv(nl_sd, (void *)nlh, MAX_MSG_SIZE, 0);
-
-	if ((nlh->nlmsg_type == NLMSG_ERROR) || (len < 0) ||
-	    !(NLMSG_OK(nlh, (unsigned int)len))) {
+	if (len < 0) {
+		printf("RECEIVE FAILED with %d", errno);
 		free(nlh);
-		printf("RECEIVE FAILED: %d\n", len);
-#ifdef HEXDUMP
-		if (len > 0)
-			hexprint((char *)nlh, len);
-#endif
 		return NULL;
 	}
-#ifdef HEXDUMP
-	printf("RECEIVED A MESSAGE: %d\n", len);
-	hexprint((char *)nlh, nlh->nlmsg_len);
-#endif
+
+	if (!(NLMSG_OK(nlh, (unsigned int)len))) {
+		printf("RECEIVE FAILED, message too long\n");
+		free(nlh);
+		return NULL;
+	}
+	if (nlh->nlmsg_type == NLMSG_ERROR) {
+		struct nlmsgerr *err = (struct nlmsgerr *) NLMSG_DATA(nlh);
+		printf("RECEIVE FAILED with msg error %i (pid %d): %s\n",
+		       err->error, nlh->nlmsg_pid, strerror(err->error * -1));
+		if (hexdump && len > 0)
+			hexprint((char *)nlh, len);
+		free(nlh);
+		return NULL;
+	}
+	if (hexdump) {
+		printf("RECEIVED A MESSAGE: %d\n", len);
+		hexprint((char *)nlh, nlh->nlmsg_len);
+	}
 
 	return nlh;
 }
@@ -264,7 +273,7 @@ static int recv_msg(int cmd, int attr)
 	free(nlh);
 	return rval;
 }
-  
+
 static int set_state(char *ifname, __u8 state)
 {
 	struct nlmsghdr *nlh;
@@ -321,7 +330,6 @@ static int get_state(char *ifname, __u8 *state)
 
 	return 0;
 }
- 
 
 static int get_pfc_cfg(char *ifname, __u8 *pfc)
 {
@@ -335,7 +343,7 @@ static int get_pfc_cfg(char *ifname, __u8 *pfc)
 		return -EIO;
 
 	add_rta(nlh, DCB_ATTR_IFNAME, (void *)ifname,
-	        strlen(ifname) + 1);
+		strlen(ifname) + 1);
 	rta_parent = add_rta(nlh, DCB_ATTR_PFC_CFG, NULL, 0);
 
 	rta_child = add_rta(nlh, DCB_PFC_UP_ATTR_ALL, NULL, 0);
@@ -364,16 +372,16 @@ static int get_pfc_cfg(char *ifname, __u8 *pfc)
 	}
 	rta_child = NLA_DATA(rta_parent);
 	rta_parent = (struct rtattr *)((char *)rta_parent +
-	                               NLMSG_ALIGN(rta_parent->rta_len));
+				       NLMSG_ALIGN(rta_parent->rta_len));
 	for (i = 0; rta_parent > rta_child; i++) {
 		if (i == 8) {
 			printf("pfc array out of range\n");
 			break;
 		}
-		pfc[rta_child->rta_type - DCB_PFC_UP_ATTR_0] = 
+		pfc[rta_child->rta_type - DCB_PFC_UP_ATTR_0] =
 			*(__u8 *)NLA_DATA(rta_child);
 		rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+					      NLMSG_ALIGN(rta_child->rta_len));
 	}
 	if (rta_parent != rta_child)
 		printf("rta pointers are off\n");
@@ -461,7 +469,7 @@ static int get_pg(char *ifname, struct tc_config *tc, __u8 *bwg, int cmd)
 	}
 	param_parent = NLA_DATA(class_parent);
 	class_parent = (struct rtattr *)((char *)class_parent +
-	                                 NLMSG_ALIGN(class_parent->rta_len));
+					 NLMSG_ALIGN(class_parent->rta_len));
 
 	for (i = 0; class_parent > param_parent; i++) {
 		if (param_parent->rta_type >= DCB_PG_ATTR_TC_0 &&
@@ -548,7 +556,7 @@ static int get_perm_hwaddr(char *ifname, __u8 *buf_perm, __u8 *buf_san)
 
 	return 0;
 }
- 
+
 static int get_cap(char *ifname, __u8 *cap)
 {
 	struct nlmsghdr *nlh;
@@ -590,7 +598,7 @@ static int get_cap(char *ifname, __u8 *cap)
 
 	rta_child = NLA_DATA(rta_parent);
 	rta_parent = (struct rtattr *)((char *)rta_parent +
-	                               NLMSG_ALIGN(rta_parent->rta_len));
+				       NLMSG_ALIGN(rta_parent->rta_len));
 	for (i = 0; rta_parent > rta_child; i++) {
 		if (i == 8) {
 			printf("cap array out of range\n");
@@ -633,7 +641,7 @@ static int get_cap(char *ifname, __u8 *cap)
 		printf("%02x\n", cap[rta_child->rta_type]);
 
 		rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+					      NLMSG_ALIGN(rta_child->rta_len));
 	}
 	if (rta_parent != rta_child)
 		printf("rta pointers are off\n");
@@ -649,15 +657,12 @@ static int set_numtcs(char *ifname, int tcid, __u8 numtcs)
 	struct nlmsghdr *nlh;
 	struct rtattr *rta_parent, *rta_child;
 
-	int seq;
-
 	printf("set_numtcs_cfg: %s\n", ifname);
 
 	nlh = start_msg(RTM_SETDCB, DCB_CMD_SNUMTCS);
 	if (NULL == nlh)
 		return -EIO;
 
-	seq = nlh->nlmsg_seq;
 	add_rta(nlh, DCB_ATTR_IFNAME, (void *)ifname, strlen(ifname) + 1);
 	rta_parent = add_rta(nlh, DCB_ATTR_NUMTCS, NULL, 0);
 	rta_child = add_rta(nlh, tcid, &numtcs, sizeof(__u8));
@@ -710,7 +715,7 @@ static int get_numtcs(char *ifname, int tcid, __u8 *numtcs)
 	}
 	rta_child = NLA_DATA(rta_parent);
 	rta_parent = (struct rtattr *)((char *)rta_parent +
-	                               NLMSG_ALIGN(rta_parent->rta_len));
+				       NLMSG_ALIGN(rta_parent->rta_len));
 
 	found = 0;
 	for (i = 0; rta_parent > rta_child; i++) {
@@ -721,7 +726,7 @@ static int get_numtcs(char *ifname, int tcid, __u8 *numtcs)
 		}
 
 		rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+					      NLMSG_ALIGN(rta_child->rta_len));
 	}
 	if (rta_parent != rta_child)
 		printf("rta pointers are off\n");
@@ -760,7 +765,7 @@ static int get_bcn(char *ifname, bcn_cfg *bcn_data)
 		return -EIO;
 
 	add_rta(nlh, DCB_ATTR_IFNAME, (void *)ifname,
-	        strlen(ifname) + 1);
+		strlen(ifname) + 1);
 	rta_parent = add_rta(nlh, DCB_ATTR_BCN, NULL, 0);
 	rta_child = add_rta(nlh, DCB_BCN_ATTR_ALL, NULL, 0);
 	rta_parent->rta_len += NLMSG_ALIGN(rta_child->rta_len);
@@ -771,7 +776,7 @@ static int get_bcn(char *ifname, bcn_cfg *bcn_data)
 	nlh = get_msg();
 	if (!nlh)
 	{
-		printf("error getting BCN cfg.\n");	
+		printf("error getting BCN cfg.\n");
 		return -EIO;
 	}
 
@@ -793,17 +798,17 @@ static int get_bcn(char *ifname, bcn_cfg *bcn_data)
 	}
 	rta_child = NLA_DATA(rta_parent);
 	rta_parent = (struct rtattr *)((char *)rta_parent +
-	                               NLMSG_ALIGN(rta_parent->rta_len));
+				       NLMSG_ALIGN(rta_parent->rta_len));
 	for (i = 0; rta_parent > rta_child; i++) {
 		if (i == DCB_BCN_ATTR_RP_ALL - DCB_BCN_ATTR_RP_0) {
 			printf("bcn param out of range\n");
 			break;
 		}
 		bcn_data->up_settings[rta_child->rta_type
-			- DCB_BCN_ATTR_RP_0].rp_admin = 
+			- DCB_BCN_ATTR_RP_0].rp_admin =
 				*(__u8 *)NLA_DATA(rta_child);
 		rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+					      NLMSG_ALIGN(rta_child->rta_len));
 
 	}
 
@@ -812,7 +817,7 @@ static int get_bcn(char *ifname, bcn_cfg *bcn_data)
 		rta_child = (struct rtattr *)((char *)rta_child +
 					     NLMSG_ALIGN(rta_child->rta_len));
 		for (j = 0; j < 4; j++) {
-			bcn_data->bcna[j+i*4] = 
+			bcn_data->bcna[j+i*4] =
 			    (__u8)((temp_int & (0xFF << (j*8))) >> (j*8));
 		}
 	}
@@ -820,54 +825,54 @@ static int get_bcn(char *ifname, bcn_cfg *bcn_data)
 	memcpy((void *)&bcn_data->rp_alpha, (__u32 *)NLA_DATA(rta_child),
 		sizeof(__u32));
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	memcpy((void *)&bcn_data->rp_beta, (__u32 *)NLA_DATA(rta_child),
 		sizeof(__u32));
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	memcpy((void *)&bcn_data->rp_gd, (__u32 *)NLA_DATA(rta_child),
 		sizeof(__u32));
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	memcpy((void *)&bcn_data->rp_gi, (__u32 *)NLA_DATA(rta_child),
 		sizeof(__u32));
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	bcn_data->rp_tmax = *(__u32 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	bcn_data->rp_td = *(__u16 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	bcn_data->rp_rmin = *(__u16 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	bcn_data->rp_w = *(__u8 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	bcn_data->rp_rd = *(__u8 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	bcn_data->rp_ru = *(__u8 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	bcn_data->rp_wrtt = *(__u8 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	bcn_data->rp_ri = *(__u32 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		                              NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	if (rta_parent != rta_child)
 		printf("rta pointers are off\n");
@@ -884,7 +889,6 @@ static int set_bcn_cfg(char *ifname, bcn_cfg *bcn_data)
 	struct rtattr *rta_parent, *rta_child;
 
 	int i;
-	int seq;
 	int temp_int;
 
 	printf("set_bcn_cfg: %s\n", ifname);
@@ -893,11 +897,10 @@ static int set_bcn_cfg(char *ifname, bcn_cfg *bcn_data)
 	if (NULL == nlh)
 		return -EIO;
 
-	seq = nlh->nlmsg_seq;
 	add_rta(nlh, DCB_ATTR_IFNAME, (void *)ifname, strlen(ifname) + 1);
 	rta_parent = add_rta(nlh, DCB_ATTR_BCN, NULL, 0);
 	for (i = DCB_BCN_ATTR_RP_0; i <= DCB_BCN_ATTR_RP_7; i++) {
-		rta_child = add_rta(nlh, i, 
+		rta_child = add_rta(nlh, i,
 		   (void *)&bcn_data->up_settings[i - DCB_BCN_ATTR_RP_0].rp_admin,
 		     sizeof(__u8));
 		rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
@@ -906,68 +909,68 @@ static int set_bcn_cfg(char *ifname, bcn_cfg *bcn_data)
 	temp_int = 0;
 	for (i = 0; i < BCN_ADDR_OPTION_LEN/2; i++)
 		temp_int |= bcn_data->bcna[i]<<(i*8);
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_BCNA_0, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_BCNA_0,
 		(void *)&temp_int, sizeof(__u32));
-	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);	
+	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
 	temp_int = 0;
 	for (i = BCN_ADDR_OPTION_LEN/2; i < BCN_ADDR_OPTION_LEN; i++)
 		temp_int |= bcn_data->bcna[i]<<((i- BCN_ADDR_OPTION_LEN/2)*8);
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_BCNA_1, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_BCNA_1,
 		(void *)&temp_int, sizeof(__u32));
-	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);	
+	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_ALPHA, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_ALPHA,
 		(void *)&bcn_data->rp_alpha, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_BETA, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_BETA,
 		(void *)&bcn_data->rp_beta, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_GD, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_GD,
 		(void *)&bcn_data->rp_gd, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_GI, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_GI,
 		(void *)&bcn_data->rp_gi, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_TMAX, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_TMAX,
 		(void *)&bcn_data->rp_tmax, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
 	temp_int = (int)bcn_data->rp_td;
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_TD, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_TD,
 		(void *)&temp_int, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
 	temp_int = (int)bcn_data->rp_rmin;
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_RMIN, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_RMIN,
 		(void *)&temp_int, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
 	temp_int = (int)bcn_data->rp_w;
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_W, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_W,
 		(void *)&temp_int, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
 	temp_int = (int)bcn_data->rp_rd;
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_RD, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_RD,
 		(void *)&temp_int, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
 	temp_int = (int)bcn_data->rp_ru;
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_RU, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_RU,
 		(void *)&temp_int, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
 	temp_int = (int)bcn_data->rp_wrtt;
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_WRTT, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_WRTT,
 		(void *)&temp_int, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
-	rta_child = add_rta(nlh, DCB_BCN_ATTR_RI, 
+	rta_child = add_rta(nlh, DCB_BCN_ATTR_RI,
 		(void *)&bcn_data->rp_ri, sizeof(__u32));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
@@ -989,7 +992,7 @@ static int set_hw_bcn(char *device_name, bcn_cfg *bcn_data,
 	{
 		for (i = 0; i <= 8; i++) {
 			bcn_data->up_settings[i].rp_admin = 1;
-		}	
+		}
 		bcn_data->rp_alpha = 0.5;
 		bcn_data->rp_beta  = 0.1;
 		bcn_data->rp_gd    = 0.00026; /* Based on other default parameters */
@@ -1002,7 +1005,7 @@ static int set_hw_bcn(char *device_name, bcn_cfg *bcn_data,
 		bcn_data->rp_ru    = 1;
 		bcn_data->rp_ri    = 5001;
 		bcn_data->rp_wrtt  = 9;
-	}	
+	}
 
 	if (!oper_mode) /* oper mode is false */
 	{
@@ -1018,7 +1021,7 @@ static int set_hw_bcn(char *device_name, bcn_cfg *bcn_data,
 		else
 			bcn_temp->up_settings[i].cp_admin = 0;
 	}
- 
+
 	return set_bcn_cfg(device_name, bcn_temp);
 }
 
@@ -1029,7 +1032,6 @@ static int get_app_cfg(char *ifname, appgroup_attribs *app_data)
 	struct dcbmsg *d;
 	struct rtattr *rta_parent, *rta_child;
 	int rval = 0;
-	unsigned int seq;
 	__u8 idtype;
 	__u16 id;
 
@@ -1037,15 +1039,14 @@ static int get_app_cfg(char *ifname, appgroup_attribs *app_data)
 	if (NULL==nlh)
 		return -EIO;
 
-	seq = nlh->nlmsg_seq;
 	add_rta(nlh, DCB_ATTR_IFNAME, (void *)ifname, strlen(ifname) + 1);
 	rta_parent = add_rta(nlh, DCB_ATTR_APP, NULL, 0);
 
-	rta_child = add_rta(nlh, DCB_APP_ATTR_IDTYPE, 
+	rta_child = add_rta(nlh, DCB_APP_ATTR_IDTYPE,
 		(void *)&app_data->dcb_app_idtype, sizeof(__u8));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
-	rta_child = add_rta(nlh, DCB_APP_ATTR_ID, 
+	rta_child = add_rta(nlh, DCB_APP_ATTR_ID,
 		(void *)&app_data->dcb_app_id, sizeof(__u16));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
@@ -1064,7 +1065,7 @@ static int get_app_cfg(char *ifname, appgroup_attribs *app_data)
 		printf("Hmm, this is not the message we were expecting.\n");
 		rval = -EIO;
 		goto get_error;
-	} 
+	}
 	if (rta_parent->rta_type != DCB_ATTR_APP) {
 		printf("A full libnetlink (with genl and attribute support) "
 		       "would sure be nice.\n");
@@ -1074,11 +1075,11 @@ static int get_app_cfg(char *ifname, appgroup_attribs *app_data)
 
 	rta_child = NLA_DATA(rta_parent);
 	rta_parent = (struct rtattr *)((char *)rta_parent +
-	                               NLMSG_ALIGN(rta_parent->rta_len));
+				       NLMSG_ALIGN(rta_parent->rta_len));
 
 	idtype = *(__u8 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		             NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 	if (idtype != app_data->dcb_app_idtype) {
 		rval = -EIO;
 		goto get_error;
@@ -1086,7 +1087,7 @@ static int get_app_cfg(char *ifname, appgroup_attribs *app_data)
 
 	id = *(__u16 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		             NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 	if (id != app_data->dcb_app_id) {
 		rval = -EIO;
 		goto get_error;
@@ -1094,7 +1095,7 @@ static int get_app_cfg(char *ifname, appgroup_attribs *app_data)
 
 	app_data->dcb_app_priority = *(__u8 *)NLA_DATA(rta_child);
 	rta_child = (struct rtattr *)((char *)rta_child +
-		             NLMSG_ALIGN(rta_child->rta_len));
+				      NLMSG_ALIGN(rta_child->rta_len));
 
 	if (rta_parent != rta_child)
 		printf("rta pointers are off\n");
@@ -1108,7 +1109,6 @@ int set_hw_app0(char *ifname, appgroup_attribs *app_data)
 {
 	struct nlmsghdr *nlh;
 	struct rtattr *rta_parent, *rta_child;
-	int seq;
 
 	printf("set_hw_app0: %s\n", ifname);
 
@@ -1116,19 +1116,18 @@ int set_hw_app0(char *ifname, appgroup_attribs *app_data)
 	if (NULL == nlh)
 		return -EIO;
 
-	seq = nlh->nlmsg_seq;
 	add_rta(nlh, DCB_ATTR_IFNAME, (void *)ifname, strlen(ifname) + 1);
 	rta_parent = add_rta(nlh, DCB_ATTR_APP, NULL, 0);
 
-	rta_child = add_rta(nlh, DCB_APP_ATTR_IDTYPE, 
+	rta_child = add_rta(nlh, DCB_APP_ATTR_IDTYPE,
 		(void *)&app_data->dcb_app_idtype, sizeof(__u8));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
-	rta_child = add_rta(nlh, DCB_APP_ATTR_ID, 
+	rta_child = add_rta(nlh, DCB_APP_ATTR_ID,
 		(void *)&app_data->dcb_app_id, sizeof(__u16));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
-	rta_child = add_rta(nlh, DCB_APP_ATTR_PRIORITY, 
+	rta_child = add_rta(nlh, DCB_APP_ATTR_PRIORITY,
 		(void *)&app_data->dcb_app_priority, sizeof(__u8));
 	rta_parent->rta_len += NLA_ALIGN(rta_child->rta_len);
 
@@ -1316,6 +1315,7 @@ int main(int argc, char *argv[])
 	struct tc_config tc[8];
 	int i, err = 0;
 	int newstate = -1;
+	int read_only = 0;
 	__u8 state;
 	__u8 pfc[8] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	__u8 bwg[8] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -1327,23 +1327,34 @@ int main(int argc, char *argv[])
 	appgroup_attribs app_data = {DCB_APP_IDTYPE_ETHTYPE, 0x8906, 0x08};
 #endif /* DCB_APP_DRV_IF_SUPPORTED */
 	int ifindex;
-  
+	int optind = 1;
+	char *ifname;
+
 	printf("Calling RTNETLINK interface.\n");
 	if (argc < 2) {
-		fprintf(stderr, "usage: %s <ifname> [on|off]\n", argv[0]);
+		fprintf(stderr, "usage: %s [-v] <ifname> [on|off|ro]\n",
+			argv[0]);
 		exit(1);
 	}
 
-	if (argc >= 3) {
-		if (!strcmp(argv[2], "on"))
-			newstate = 1;
-		if (!strcmp(argv[2], "off"))
-			newstate = 0;
+	if (argc > 2) {
+		if (!strcmp(argv[1], "-v")) {
+			hexdump = 1;
+			optind++;
+		}
+		if (argc > optind + 1) {
+			if (!strcmp(argv[optind + 1], "on"))
+				newstate = 1;
+			if (!strcmp(argv[optind + 1], "off"))
+				newstate = 0;
+			if (!strcmp(argv[optind + 1], "ro"))
+				read_only = 1;
+		}
 	}
-
-	ifindex = if_nametoindex(argv[1]);
+	ifname = argv[optind];
+	ifindex = if_nametoindex(ifname);
 	if (ifindex == 0) {
-		printf("no ifindex for %s\n", argv[1]);
+		printf("no ifindex for %s\n", ifname);
 		exit(1);
 	}
 
@@ -1364,20 +1375,20 @@ int main(int argc, char *argv[])
 #endif
 
 	printf("GETTING DCB STATE\n");
-	err = get_state(argv[1], &state);
+	err = get_state(ifname, &state);
 	if (err) {
 		fprintf(stderr, "Error getting DCB state\n");
 		goto err_main;
 	}
 	printf("DCB State = %d\n", state);
-	
+
 	if (newstate >= 0) {
 		printf("\nSETTING DCB STATE TO: %d\n", newstate);
-		err = set_state(argv[1], newstate);
+		err = set_state(ifname, newstate);
 		if (err)
 			goto err_main;
 
-		err = get_state(argv[1], &state);
+		err = get_state(ifname, &state);
 		if (err) {
 			fprintf(stderr, "Error getting DCB state\n");
 			goto err_main;
@@ -1388,13 +1399,13 @@ int main(int argc, char *argv[])
 	printf("\nGETTING PFC CONFIGURATION\n");
 	for (i=0; i<8; i++)
 		pfc[i] = 0x0f;
-	get_pfc_cfg(argv[1], pfc);
+	get_pfc_cfg(ifname, pfc);
 	printf("PFC config:\n");
 	for (i=0; i<8; i++)
 		printf("%x ", pfc[i]);
 	printf("\n");
 
-	get_pfc_state(argv[1], &state);
+	get_pfc_state(ifname, &state);
 	if (err) {
 		fprintf(stderr, "Error getting PFC status\n");
 		goto err_main;
@@ -1402,7 +1413,7 @@ int main(int argc, char *argv[])
 	printf("PFC State = %d\n", state);
 
 	printf("\nGETTING PG TX CONFIGURATION\n");
-	get_pg(argv[1], tc, bwg, DCB_CMD_PGTX_GCFG);
+	get_pg(ifname, tc, bwg, DCB_CMD_PGTX_GCFG);
 	for (i = 0; i < 8; i++) {
 		printf("%d: pr=%d\tbwgid=%d\tbw%%=%d\tu2t=%d\tlk%%=%d\n", i,
 			tc[i].prio_type,
@@ -1421,7 +1432,7 @@ int main(int argc, char *argv[])
 	printf("\nGETTING PG RX CONFIGURATION\n");
 	memset(bwg, 0, sizeof(bwg));
 	memset(&tc[0], 0, sizeof(tc));
-	get_pg(argv[1], tc, bwg, DCB_CMD_PGRX_GCFG);
+	get_pg(ifname, tc, bwg, DCB_CMD_PGRX_GCFG);
 	for (i = 0; i < 8; i++) {
 		printf("%d: pr=%d\tbwgid=%d\tbw%%=%d\tu2t=%d\tlk%%=%d\n", i,
 			tc[i].prio_type,
@@ -1432,7 +1443,7 @@ int main(int argc, char *argv[])
 	}
 
 	printf("\nGETTING PERMANENT MAC: ");
-	get_perm_hwaddr(argv[1], mac, san_mac);
+	get_perm_hwaddr(ifname, mac, san_mac);
 	for (i = 0; i < 5; i++)
 		printf("%02x:", mac[i]);
 	printf("%02x\n", mac[i]);
@@ -1443,65 +1454,70 @@ int main(int argc, char *argv[])
 	printf("%02x\n", san_mac[i]);
 
 	printf("\nGETTING DCB CAPABILITIES\n");
-	get_cap(argv[1], &cap[0]);
+	get_cap(ifname, &cap[0]);
 
 	printf("\nGET NUMBER OF PG TCS\n");
-	if (!get_numtcs(argv[1], DCB_NUMTCS_ATTR_PG, &numtcs))
+	if (!get_numtcs(ifname, DCB_NUMTCS_ATTR_PG, &numtcs))
 		printf("num = %d\n", numtcs);
 	else	printf("not found\n");
 
 	printf("\nGET NUMBER OF PFC TCS\n");
-	if (!get_numtcs(argv[1], DCB_NUMTCS_ATTR_PFC, &numtcs))
+	if (!get_numtcs(ifname, DCB_NUMTCS_ATTR_PFC, &numtcs))
 		printf("num = %d\n", numtcs);
 	else	printf("not found\n");
 
-	printf("\nTEST SET NUMBER OF PG TCS\n");
-	if (!set_numtcs(argv[1], DCB_NUMTCS_ATTR_PG, numtcs))
-		printf("set passed\n");
-	else	printf("error\n");
+	if (!read_only) {
+		printf("\nTEST SET NUMBER OF PG TCS\n");
+		if (!set_numtcs(ifname, DCB_NUMTCS_ATTR_PG, numtcs))
+			printf("set passed\n");
+		else	printf("error\n");
 
-	printf("\nTEST SET NUMBER OF PFC TCS\n");
-	if (!set_numtcs(argv[1], DCB_NUMTCS_ATTR_PFC, numtcs))
-		printf("set passed\n");
-	else	printf("error\n\n");
+		printf("\nTEST SET NUMBER OF PFC TCS\n");
+		if (!set_numtcs(ifname, DCB_NUMTCS_ATTR_PFC, numtcs))
+			printf("set passed\n");
+		else	printf("error\n\n");
 
-/*	printf("set_pfc_cfg = %d\n", set_pfc_cfg(argv[1], pfc)); */
-/*	printf("set_rx_pg = %d\n", set_pg(argv[1], tc, bwg, DCB_CMD_PGRX_SCFG));*/
-/*	printf("set_hw_all = %d\n", set_hw_all(argv[1])); */
+/*	printf("set_pfc_cfg = %d\n", set_pfc_cfg(ifname, pfc)); */
+/*	printf("set_rx_pg = %d\n", set_pg(ifname, tc, bwg, DCB_CMD_PGRX_SCFG));*/
+/*	printf("set_hw_all = %d\n", set_hw_all(ifname)); */
 
-	err = set_hw_bcn(argv[1], &bcn_set_data, 1);
-	printf("set_bcn_cfg result is %d.\n", err);
+		err = set_hw_bcn(ifname, &bcn_set_data, 1);
+		printf("set_bcn_cfg result is %d.\n", err);
 
-	/*set_hw_all(argv[1]);*/
-
-	get_bcn(argv[1], &bcn_data);
-	printf("\nGETTING BCN: \n");
-	for (i = 0; i < 8; i++) {
-		printf("BCN RP %d: %d\n", i, 
-			bcn_data.up_settings[i].rp_admin);
+		/*set_hw_all(ifname);*/
 	}
-	printf("\nBCN RP ALPHA: %f\n", bcn_data.rp_alpha);
-	printf("BCN RP BETA : %f\n", bcn_data.rp_beta);
-	printf("BCN RP GD   : %f\n", bcn_data.rp_gd);
-	printf("BCN RP GI   : %f\n", bcn_data.rp_gi);
-	printf("BCN RP TMAX : %d\n", bcn_data.rp_tmax);
-	printf("BCN RP RI   : %d\n", bcn_data.rp_ri);
-	printf("BCN RP TD   : %d\n", bcn_data.rp_td);
-	printf("BCN RP RMIN : %d\n", bcn_data.rp_rmin);
-	printf("BCN RP W    : %d\n", bcn_data.rp_w);
-	printf("BCN RP RD   : %d\n", bcn_data.rp_rd);
-	printf("BCN RP RU   : %d\n", bcn_data.rp_ru);
-	printf("BCN RP WRTT : %d\n", bcn_data.rp_wrtt);
+
+	printf("\nGETTING BCN:\n");
+	if (!get_bcn(ifname, &bcn_data)) {
+		for (i = 0; i < 8; i++) {
+			printf("BCN RP %d: %d\n", i,
+			       bcn_data.up_settings[i].rp_admin);
+		}
+		printf("\nBCN RP ALPHA: %f\n", bcn_data.rp_alpha);
+		printf("BCN RP BETA : %f\n", bcn_data.rp_beta);
+		printf("BCN RP GD   : %f\n", bcn_data.rp_gd);
+		printf("BCN RP GI   : %f\n", bcn_data.rp_gi);
+		printf("BCN RP TMAX : %d\n", bcn_data.rp_tmax);
+		printf("BCN RP RI   : %d\n", bcn_data.rp_ri);
+		printf("BCN RP TD   : %d\n", bcn_data.rp_td);
+		printf("BCN RP RMIN : %d\n", bcn_data.rp_rmin);
+		printf("BCN RP W    : %d\n", bcn_data.rp_w);
+		printf("BCN RP RD   : %d\n", bcn_data.rp_rd);
+		printf("BCN RP RU   : %d\n", bcn_data.rp_ru);
+		printf("BCN RP WRTT : %d\n", bcn_data.rp_wrtt);
+	} else	printf("not found\n");
 
 #ifdef DCB_APP_DRV_IF_SUPPORTED
-	printf("\nSETTING APP:\n");
-	if (set_hw_app0(argv[1], &app_data)) {
-		printf("Fail to set app data.\n");
-		goto err_main;
+	if (!read_only) {
+		printf("\nSETTING APP:\n");
+		if (set_hw_app0(ifname, &app_data)) {
+			printf("Fail to set app data.\n");
+			goto err_main;
+		}
 	}
 
 	printf("\nGETTING APP:\n");
-	if (!get_app_cfg(argv[1], &app_data)) {
+	if (!get_app_cfg(ifname, &app_data)) {
 		printf("APP ID TYPE: ");
 		if (app_data.dcb_app_idtype)
 			printf(" \t DCB_APP_IDTYPE_ETHTYPE.\n");
@@ -1512,11 +1528,11 @@ int main(int argc, char *argv[])
 		printf(" APP PRIORITY: 0x%0x.\n", app_data.dcb_app_priority);
 	}
 	else {
-		printf("GETTING APP FAILED!.\n"); 
+		printf("GETTING APP FAILED!.\n");
 	}
 #endif /* DCB_APP_DRV_IF_SUPPORTED */
 
-	if (1) {
+	if (!read_only) {
 		struct ieee_ets ets = {
 			.willing = 0, .ets_cap = 0x1, .cbs = 0,
 			.tc_tx_bw = {25, 25, 25, 25, 0, 0, 0, 0},
@@ -1532,10 +1548,10 @@ int main(int argc, char *argv[])
 		};
 
 		printf("\nSETTING ETS:\n");
-		set_ieee(argv[1], &ets, &pfc, &app);
+		set_ieee(ifname, &ets, &pfc, &app);
 	}
 
-	get_ieee(argv[1]);
+	get_ieee(ifname);
 
 err_main:
 	close(nl_sd);

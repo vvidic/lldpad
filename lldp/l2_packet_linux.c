@@ -42,8 +42,6 @@
 #include "lldp/states.h"
 #include "lldp_dcbx_nl.h"
 
-static struct port *bond_porthead = NULL;
-
 struct l2_packet_data {
 	int fd;
 	char ifname[IFNAMSIZ + 1];
@@ -67,9 +65,11 @@ int l2_packet_get_own_src_addr(struct l2_packet_data *l2, u8 *addr)
 		/* get an appropriate src MAC to use if the port is
 	 	* part of a bond.
 		*/
-		struct port *bond_port = bond_porthead;
+		struct port *bond_port = porthead;
 		while (bond_port != NULL) {
-			if (get_src_mac_from_bond(bond_port, l2->ifname, addr))
+			if (bond_port->bond_master
+			    && get_src_mac_from_bond(bond_port, l2->ifname,
+						     addr))
 				return 0;
 
 			bond_port = bond_port->next;
@@ -130,7 +130,7 @@ int l2_packet_send(struct l2_packet_data *l2, const u8 *dst_addr, u16 proto,
 }
 
 
-static void l2_packet_receive(int sock, void *eloop_ctx, void *sock_ctx)
+static void l2_packet_receive(int sock, void *eloop_ctx, UNUSED void *sock_ctx)
 {
 	struct l2_packet_data *l2 = eloop_ctx;
 	u8 buf[2300];
@@ -154,7 +154,7 @@ static void l2_packet_receive(int sock, void *eloop_ctx, void *sock_ctx)
 
 
 struct l2_packet_data * l2_packet_init(
-	const char *ifname, const u8 *own_addr, unsigned short protocol,
+	const char *ifname, UNUSED const u8 *own_addr, unsigned short protocol,
 	void (*rx_callback)(void *ctx, int ifindex,
 			    const u8 *buf, size_t len),
 	void *rx_callback_ctx, int l2_hdr)
@@ -214,6 +214,9 @@ struct l2_packet_data * l2_packet_init(
 		memcpy(l2->perm_mac_addr, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
 		memset(l2->san_mac_addr, 0xff, ETH_ALEN);
 	}
+	LLDPAD_DBG("%s mac:" MACSTR " perm:" MACSTR " san:" MACSTR "\n",
+		   ifname, MAC2STR(l2->curr_mac_addr),
+		   MAC2STR(l2->perm_mac_addr), MAC2STR(l2->san_mac_addr));
 
 	struct packet_mreq mr;
 	memset(&mr, 0, sizeof(mr));
@@ -237,7 +240,7 @@ struct l2_packet_data * l2_packet_init(
 	memcpy(mr.mr_address, &nearest_nontpmr_bridge, ETH_ALEN);
 	if (setsockopt(l2->fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr,
 		       sizeof(mr)) < 0)
-		perror("setsockopt nearest_customer_bridge");
+		perror("setsockopt nearest_nontpmr_bridge");
 
 	int option = 1;
 	int option_size = sizeof(option);
@@ -278,146 +281,4 @@ void l2_packet_deinit(struct l2_packet_data *l2)
 	}
 		
 	free(l2);
-}
-
-void l2_packet_get_port_state(struct l2_packet_data *l2, u8  *portEnabled)
-{
-
-	int s;
-	struct ifreq ifr;
-
-	s = socket(PF_INET, SOCK_DGRAM, 0);
-	if (s < 0) {
-		perror("socket");
-		return;
-	}
-	memset(&ifr, 0, sizeof(ifr));
-	strncpy(ifr.ifr_name, l2->ifname, sizeof(ifr.ifr_name));
-
-	if (ioctl(s, SIOCGIFFLAGS, &ifr) < 0) {
-		perror("ioctl[SIOCGIFFLAGS]");
-		close(s);
-		*portEnabled = 0;
-		return;
-	}
-		
-	*portEnabled = ifr.ifr_flags & IFF_UP;
-	close(s);
-	return;
-}
-
-
-struct port *add_bond_port(const char *ifname)
-{
-	struct port *bond_newport;
-
-	bond_newport = bond_porthead;
-	while (bond_newport != NULL) {
-		if(!strncmp(ifname, bond_newport->ifname,
-			MAX_DEVICE_NAME_LEN))
-			return bond_newport;
-		bond_newport = bond_newport->next;
-	}
-
-	bond_newport  = (struct port *)malloc(sizeof(struct port));
-	if (bond_newport == NULL) {
-		syslog(LOG_ERR, "failed to malloc bond port %s", ifname);
-		return NULL;
-	}
-	memset(bond_newport,0,sizeof(struct port));	
-	bond_newport->next = NULL;
-	bond_newport->ifname = strdup(ifname);
-	if (bond_newport->ifname == NULL) {
-		syslog(LOG_ERR, "failed to strdup bond name %s", ifname);
-		goto fail1;
-	}
-	
-	bond_newport->l2 = l2_packet_init(bond_newport->ifname, NULL,
-		ETH_P_LLDP, recv_on_bond, bond_newport, 1);
-
-	if (bond_newport->l2 == NULL) {
-		syslog(LOG_ERR, "failed to open register layer 2 access to "
-			   "ETH_P_LLDP");
-		goto fail2;
-	}
-
-	if (bond_porthead)
-		bond_newport->next = bond_porthead;
-	bond_porthead = bond_newport;
-
-	return bond_newport;
-
-fail2:
-	free(bond_newport->ifname);
-	bond_newport->ifname = NULL;
-fail1:
-	free(bond_newport);
-	bond_newport = NULL;
-	return NULL;
-}
-
-
-void recv_on_bond(void *ctx, int ifindex, const u8 *buf, size_t len)
-{
-	struct port *port;
-
-	/* Find the originating slave port object */
-	for (port = porthead; port != NULL && port->l2->ifindex != ifindex;
-		port = port->next)
-		;
-
-	if (port)
-		rxReceiveFrame(port, ifindex, buf, len);
-}
-
-
-int remove_bond_port(const char *ifname)
-{
-	struct port *bond_port = bond_porthead;
-	struct port *bond_parent = NULL;
-
-	while (bond_port != NULL) {
-		if (!strncmp(ifname, bond_port->ifname, MAX_DEVICE_NAME_LEN)) {
-			LLDPAD_DBG("In remove_bond_port: Found bond port  %s\n",
-				bond_port->ifname);
-			break;
-		}
-		bond_parent = bond_port;
-		bond_port = bond_port->next;
-	}
-
-	if (bond_port == NULL)
-		return -1;
-
-	l2_packet_deinit(bond_port->l2);
-
-	if (bond_parent == NULL)
-		bond_porthead = bond_port->next;
-	else if (bond_parent->next == bond_port)     /* sanity check */
-		bond_parent->next = bond_port->next;	
-	else
-		return -1;
-
-	if (bond_port->ifname)
-		free(bond_port->ifname);
-	
-	free(bond_port);
-	return 0;
-}
-
-void remove_all_bond_ports(void)
-{
-	struct port *bond_port = bond_porthead;
-	struct port *next_bond_port = bond_porthead;
-
-	while (bond_port != NULL) {
-		next_bond_port = bond_port->next;
-
-		l2_packet_deinit(bond_port->l2);
-		if (bond_port->ifname)
-			free(bond_port->ifname);
-		free(bond_port);
-
-		bond_port = next_bond_port;
-	}
 }
