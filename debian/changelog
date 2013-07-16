@@ -1,9 +1,12 @@
-lldpad (0.9.46-1) UNRELEASED; urgency=low
+lldpad (0.9.46-1) unstable; urgency=low
 
-  * [a1194ea] Add README.source
   * [8e5431e] Imported Upstream version 0.9.46
+  * [4b269d3] Refresh patches
+  * [a1194ea] Add README.source
+  * [49b09fb] update Vcs links
+  * [baf5d63] Add Hardening build
 
- -- Ritesh Raj Sarraf <rrs@debian.org>  Tue, 16 Jul 2013 19:11:22 +0530
+ -- Ritesh Raj Sarraf <rrs@debian.org>  Tue, 16 Jul 2013 19:48:41 +0530
 
 lldpad (0.9.44-1) unstable; urgency=low
 
