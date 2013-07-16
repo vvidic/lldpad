@@ -1,16 +1,18 @@
 Don't run /sbin/chkconfig after install data. 
 chkconfig is used to manage system services in redhat series linux distribution. 
 It don't fit to Debian. 
---- a/Makefile.am
-+++ b/Makefile.am
-@@ -95,13 +95,11 @@
- 	$(INSTALL_SCRIPT) lldpad.init $(DESTDIR)/etc/init.d/lldpad
+Index: lldpad/Makefile.am
+===================================================================
+--- lldpad.orig/Makefile.am	2013-07-16 19:19:09.368916630 +0530
++++ lldpad/Makefile.am	2013-07-16 19:19:42.936915363 +0530
+@@ -131,13 +131,11 @@
+ BASH_COMPLETION_DIR=/etc/bash_completion.d/
  
  install-data-hook:
 -	/sbin/chkconfig --add lldpad || true
- 	## provide legacy support for apps that use the old dcbd interface.
- 	test -e $(includedir)/dcbd || `ln -T -s $(includedir)/lldpad $(includedir)/dcbd`
- 	test -e $(includedir)/dcbd/clif_cmds.h || `ln -T -s $(includedir)/lldpad/lldp_dcbx_cmds.h $(includedir)/dcbd/clif_cmds.h`
+ 	## provide support for bash completion
+ 	$(MKDIR_P) $(DESTDIR)/$(BASH_COMPLETION_DIR)
+ 	$(INSTALL_SCRIPT) ${srcdir}/contrib/bash_completion/* $(DESTDIR)/$(BASH_COMPLETION_DIR)
  
  uninstall-local:
 -	/sbin/chkconfig --del lldpad || true
