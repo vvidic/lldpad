@@ -8,5 +8,4 @@ liblldp_clif.*
 m4/
 vdptest
 qbg22sim
-patches/
 ar-lib
