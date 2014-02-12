@@ -1,3 +1,11 @@
+lldpad (0.9.46-2) unstable; urgency=medium
+
+  * Add patch to fix build failure. Thanks Hideki Yamane
+  * debian/patches
+    - add specify_subdir-objects.patch (Closes: #725579)
+
+ -- Ritesh Raj Sarraf <rrs@debian.org>  Wed, 12 Feb 2014 23:29:32 +0530
+
 lldpad (0.9.46-1) unstable; urgency=low
 
   * [8e5431e] Imported Upstream version 0.9.46
