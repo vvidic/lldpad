@@ -1,19 +1,19 @@
 Source: lldpad
 Priority: extra
 Maintainer: Debian FCoE Maintainers <pkg-fcoe-general@lists.alioth.debian.org>
-Uploaders: Ritesh Raj Sarraf <rrs@debian.org>, Liang Guo <bluestonechina@gmail.com>
-Build-Depends: debhelper (>= 7.0.50~), 
+Uploaders: Ritesh Raj Sarraf <rrs@debian.org>, Liang Guo <bluestonechina@gmail.com>, Jacob Luna Lundberg <jacob@gnifty.net>
+Build-Depends: debhelper (>= 7), 
  autotools-dev, 
  pkg-config,
  libconfig-dev (>= 1.3.2~),
- libnl-dev (>= 1.1),
+ libnl-3-dev,
  flex,
  dh-autoreconf,
  libreadline-dev,
  dpkg-dev (>= 1.16.1~)
-Standards-Version: 3.9.3
+Standards-Version: 3.9.6
 Section: net
-Homepage: http://open-lldp.org/
+Homepage: http://lldpad.org/
 Vcs-Git: git://anonscm.debian.org/pkg-fcoe/lldpad.git
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=pkg-fcoe/lldpad.git;a=summary
 
@@ -22,17 +22,18 @@ Section: libdevel
 Architecture: any
 Depends: ${misc:Depends}
 Description: Link Layer Discovery Protocol Implementation (Development headers)
- The lldpad package is an implementation of the Link Layer Discovery Protocol
- (LLDP).  It originated from Intel's Data Center Bridging (DCB) software - the
- dcbd package.  The lldpad package adds LLDP support for all ports in addition
- to DCB Exchange protocol (DCBX) support on DCB capable ports (as was provided
- by dcbd).  Also, support for additional LLDP TLVs has been added.
+ The lldpad package is an implementation of the Link Layer Discovery
+ Protocol (LLDP).  It originated from Intel's Data Center Bridging (DCB)
+ software - the dcbd package.  The lldpad package adds LLDP support
+ for all ports in addition to DCB Exchange protocol (DCBX) support on DCB
+ capable ports (as was provided by dcbd).  Also, support for additional
+ LLDP TLVs has been added.
  .
- DCB is a collection of emerging standards-based technologies designed to allow
- Ethernet to support multiple types of traffic classes in the Data Center.
- The DCBX functionality of this package is designed to work with the DCB kernel
- interface (dcbnl in rtnetlink) that is included in the Linux kernel 2.6.29 or
- higher.  The Intel ixgbe driver supports the dcbnl interface.
+ DCB is a collection of emerging standards-based technologies designed to
+ allow Ethernet to support multiple types of traffic classes in the Data
+ Center.  The DCBX functionality of this package is designed to work with
+ the DCB kernel interface (dcbnl in rtnetlink) that is included in the Linux
+ kernel 2.6.29 or higher.  The Intel ixgbe driver supports the dcbnl interface.
  .
  This package contains lldpad development headers.
 
@@ -40,16 +41,17 @@ Package: lldpad
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Link Layer Discovery Protocol Implementation (Runtime)
- The lldpad package is an implementation of the Link Layer Discovery Protocol
- (LLDP).  It originated from Intel's Data Center Bridging (DCB) software - the
- dcbd package.  The lldpad package adds LLDP support for all ports in addition
- to DCB Exchange protocol (DCBX) support on DCB capable ports (as was provided
- by dcbd).  Also, support for additional LLDP TLVs has been added.
+ The lldpad package is an implementation of the Link Layer Discovery
+ Protocol (LLDP).  It originated from Intel's Data Center Bridging (DCB)
+ software - the dcbd package.  The lldpad package adds LLDP support
+ for all ports in addition to DCB Exchange protocol (DCBX) support on DCB
+ capable ports (as was provided by dcbd).  Also, support for additional
+ LLDP TLVs has been added.
  .
- DCB is a collection of emerging standards-based technologies designed to allow
- Ethernet to support multiple types of traffic classes in the Data Center.
- The DCBX functionality of this package is designed to work with the DCB kernel
- interface (dcbnl in rtnetlink) that is included in the Linux kernel 2.6.29 or
- higher.  The Intel ixgbe driver supports the dcbnl interface.
+ DCB is a collection of emerging standards-based technologies designed to
+ allow Ethernet to support multiple types of traffic classes in the Data
+ Center.  The DCBX functionality of this package is designed to work with
+ the DCB kernel interface (dcbnl in rtnetlink) that is included in the Linux
+ kernel 2.6.29 or higher.  The Intel ixgbe driver supports the dcbnl interface.
  .
  This package contains lldpad runtime binaries. 

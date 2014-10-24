@@ -1,3 +1,12 @@
+lldpad (0.9.46-3) unstable; urgency=low
+
+  * Added myself as a maintainer of this package.
+  * Applied upstream's patch to switch to libnl-3.
+  * Updated the standards version to 3.9.6; no changes required.
+  * Added a lintian override for liblldp-clif1 packaged in lldapd.
+
+ -- Jacob Luna Lundberg <jacob@gnifty.net>  Thu, 23 Oct 2014 14:51:55 -0700
+
 lldpad (0.9.46-2) unstable; urgency=medium
 
   * Add patch to fix build failure. Thanks Hideki Yamane
