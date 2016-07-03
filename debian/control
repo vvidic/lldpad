@@ -1,7 +1,7 @@
 Source: lldpad
 Priority: extra
 Maintainer: Debian FCoE Maintainers <pkg-fcoe-general@lists.alioth.debian.org>
-Uploaders: Ritesh Raj Sarraf <rrs@debian.org>, Liang Guo <bluestonechina@gmail.com>, Jacob Luna Lundberg <jacob@gnifty.net>
+Uploaders: Liang Guo <bluestonechina@gmail.com>, Jacob Luna Lundberg <jacob@gnifty.net>
 Build-Depends: debhelper (>= 7), 
  autotools-dev, 
  pkg-config,
