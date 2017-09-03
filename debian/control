@@ -37,7 +37,7 @@ Description: Link Layer Discovery Protocol Implementation (Development headers)
 
 Package: lldpad
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: lsb-base, ${shlibs:Depends}, ${misc:Depends}
 Description: Link Layer Discovery Protocol Implementation (Runtime)
  The lldpad package is an implementation of the Link Layer Discovery
  Protocol (LLDP).  It originated from Intel's Data Center Bridging (DCB)
