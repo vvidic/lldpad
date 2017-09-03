@@ -1,0 +1,102 @@
+Description: Fix GCC-7 errors breaking the package build
+Author: Valentin Vidic <Valentin.Vidic@CARNet.hr>
+Last-Update: 2017-09-03
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+--- a/include/lldp_8021qaz.h
++++ b/include/lldp_8021qaz.h
+@@ -218,8 +218,8 @@
+ 			u8 prio, u8 sel, u16 proto, u32 ops);
+ int ieee8021qaz_app_sethw(char *ifname, struct app_tlv_head *head);
+ 
+-inline int get_prio_map(u32 prio_map, int tc);
+-inline void set_prio_map(u32 *prio_map, u8 prio, int tc);
++int get_prio_map(u32 prio_map, int tc);
++void set_prio_map(u32 *prio_map, u8 prio, int tc);
+ 
+ struct ieee8021qaz_tlvs *ieee8021qaz_data(const char *);
+ 
+@@ -234,7 +234,7 @@
+ void ieee8021qaz_ifup(char *ifname, struct lldp_agent *);
+ void ieee8021qaz_ifdown(char *ifname, struct lldp_agent *);
+ u8 ieee8021qaz_mibDeleteObject(struct port *port, struct lldp_agent *);
+-inline int ieee8021qaz_clif_cmd(void *data, struct sockaddr_un *from,
++int ieee8021qaz_clif_cmd(void *data, struct sockaddr_un *from,
+ 				socklen_t fromlen, char *ibuf, int ilen,
+ 				char *rbuf);
+ int ieee8021qaz_check_operstate(void);
+--- a/lldp_util.c
++++ b/lldp_util.c
+@@ -1150,7 +1150,7 @@
+ int get_arg_val_list(char *ibuf, int ilen, int *ioff,
+ 			    char **args, char **argvals)
+ {
+-	u8 arglen;
++	u8 arglen = 0;
+ 	u16 argvalue_len;
+ 	int *arglens = NULL;
+ 	int *argvallens = NULL;
+@@ -1218,7 +1218,7 @@
+ 
+ int get_arg_list(char *ibuf, int ilen, int *ioff, char **args)
+ {
+-	u8 arglen;
++	u8 arglen = 0;
+ 	int *arglens = NULL;
+ 	int *p;
+ 	int numargs;
+--- a/lldp_mand.c
++++ b/lldp_mand.c
+@@ -217,6 +217,7 @@
+ 			if (length > 0)
+ 				break;
+ 			/* Fall through on IP error */
++			__attribute__ ((fallthrough));
+ 		case CHASSIS_ID_MAC_ADDRESS:
+ 		default:
+ 			length = mand_bld_mac_chassis(md, &chassis);
+@@ -234,6 +235,7 @@
+ 			if (length > 0)
+ 				break;
+ 			/* Fall through on IP error */
++			__attribute__ ((fallthrough));
+ 		case LLDP_MED_DEVTYPE_NETWORK_CONNECTIVITY:
+ 		default:
+ 			length =  mand_bld_ifname_chassis(md, &chassis);
+@@ -368,6 +370,7 @@
+ 				 sizeof(portid.sub);
+ 			break;
+ 		}
++		__attribute__ ((fallthrough));
+ 	case PORT_ID_NETWORK_ADDRESS:
+ 		/* uses ipv4 first */
+ 		if (!get_ipaddr(md->ifname, &portid.id.na.ip.v4)) {
+@@ -387,6 +390,7 @@
+ 				 sizeof(portid.sub);
+ 			break;
+ 		}
++		__attribute__ ((fallthrough));
+ 	case PORT_ID_INTERFACE_NAME:
+ 		portid.sub = PORT_ID_INTERFACE_NAME;
+ 		strncpy((char *)portid.id.ifname, md->ifname, IFNAMSIZ);
+--- a/lldp_med_cmds.c
++++ b/lldp_med_cmds.c
+@@ -303,6 +303,7 @@
+ 	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_III:
+ 	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_II:
+ 		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_NETWORK_POLICY);
++		__attribute__ ((fallthrough));
+ 	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_I:
+ 	case LLDP_MED_DEVTYPE_NETWORK_CONNECTIVITY:
+ 		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_RESERVED);
+--- a/lldp_8021qaz_cmds.c
++++ b/lldp_8021qaz_cmds.c
+@@ -676,7 +676,7 @@
+ 
+ 	strncat(obuf, "tcbw = ", obuf_len - strlen(obuf) - 1);
+ 	for (i = 0; i < 8; i++) {
+-		char cat[5];
++		char cat[6];
+ 		snprintf(cat, sizeof(cat), "%i%% ", percent[i]);
+ 		printf("%i%% ", percent[i]);
+ 		strncat(obuf, cat, obuf_len - strlen(obuf) - 1);

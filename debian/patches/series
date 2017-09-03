@@ -6,3 +6,4 @@ dont-touch-var-lock-subsys-lldpad-when-start.patch
 fix-typo-in-lldptool-ets-8.patch
 specify_subdir-objects.patch
 use-libnl-3.patch
+gcc-warnings.patch
