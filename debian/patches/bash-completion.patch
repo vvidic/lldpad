@@ -1,0 +1,23 @@
+Description: Update dir for installing bash completions
+ Debian uses /usr/share/bash-completion/completions
+Author: Valentin Vidic <Valentin.Vidic@CARNet.hr>
+Last-Update: 2017-09-03
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -130,12 +130,12 @@
+ 	$(MKDIR_P) $(DESTDIR)/etc/init.d
+ 	$(INSTALL_SCRIPT) lldpad.init $(DESTDIR)/etc/init.d/lldpad
+ 
+-BASH_COMPLETION_DIR=/etc/bash_completion.d/
++BASH_COMPLETION_DIR=/usr/share/bash-completion/completions
+ 
+ install-data-hook:
+ 	## provide support for bash completion
+ 	$(MKDIR_P) $(DESTDIR)/$(BASH_COMPLETION_DIR)
+-	$(INSTALL_SCRIPT) ${srcdir}/contrib/bash_completion/* $(DESTDIR)/$(BASH_COMPLETION_DIR)
++	$(INSTALL_DATA) ${srcdir}/contrib/bash_completion/* $(DESTDIR)/$(BASH_COMPLETION_DIR)
+ 
+ uninstall-local:
+ 	rm -f '$(DESTDIR)/etc/init.d/lldpad'
