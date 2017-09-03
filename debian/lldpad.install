@@ -1,4 +1,4 @@
 usr/share/man/man8/*
 usr/sbin/*
-usr/lib/liblldp_clif.so.*
+usr/lib/*/liblldp_clif.so.*
 etc/init.d/lldpad

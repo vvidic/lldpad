@@ -2,13 +2,11 @@ Source: lldpad
 Priority: extra
 Maintainer: Debian FCoE Maintainers <pkg-fcoe-general@lists.alioth.debian.org>
 Uploaders: Liang Guo <bluestonechina@gmail.com>, Jacob Luna Lundberg <jacob@gnifty.net>
-Build-Depends: debhelper (>= 7), 
- autotools-dev, 
+Build-Depends: debhelper (>= 10),
  pkg-config,
  libconfig-dev (>= 1.3.2~),
  libnl-3-dev,
  flex,
- dh-autoreconf,
  libreadline-dev,
  dpkg-dev (>= 1.16.1~)
 Standards-Version: 3.9.6

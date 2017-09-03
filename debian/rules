@@ -9,12 +9,8 @@ include /usr/share/dpkg/buildflags.mk
 
 
 %:
-	dh $@ --with autoreconf
+	dh $@
 
-override_dh_autoreconf:
-	libtoolize
-	dh_autoreconf
-	
 override_dh_auto_clean:
 	dh_auto_clean
 	-rm parse_cli.c
