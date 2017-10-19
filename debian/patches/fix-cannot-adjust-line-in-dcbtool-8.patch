@@ -1,10 +1,8 @@
 Fix cannot adjust line warning on dcbtool.8 in lintian.
 Fix hyphen-used-as-minus-sign on lldpad.8
-Index: lldpad/docs/lldpad.8
-===================================================================
---- lldpad.orig/docs/lldpad.8	2013-07-16 19:21:44.448910776 +0530
-+++ lldpad/docs/lldpad.8	2013-07-16 19:21:44.444910776 +0530
-@@ -140,8 +140,8 @@
+--- a/docs/lldpad.8
++++ b/docs/lldpad.8
+@@ -141,8 +141,8 @@
  .B \-k
  used to terminate the first instance of lldpad that was started
  (e.g. from initrd).

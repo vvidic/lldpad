@@ -27,7 +27,7 @@ This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
  int ieee8021qaz_check_operstate(void);
 --- a/lldp_util.c
 +++ b/lldp_util.c
-@@ -1150,7 +1150,7 @@
+@@ -1197,7 +1197,7 @@
  int get_arg_val_list(char *ibuf, int ilen, int *ioff,
  			    char **args, char **argvals)
  {
@@ -36,7 +36,7 @@ This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
  	u16 argvalue_len;
  	int *arglens = NULL;
  	int *argvallens = NULL;
-@@ -1218,7 +1218,7 @@
+@@ -1265,7 +1265,7 @@
  
  int get_arg_list(char *ibuf, int ilen, int *ioff, char **args)
  {
@@ -91,7 +91,7 @@ This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
  		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_RESERVED);
 --- a/lldp_8021qaz_cmds.c
 +++ b/lldp_8021qaz_cmds.c
-@@ -676,7 +676,7 @@
+@@ -665,7 +665,7 @@
  
  	strncat(obuf, "tcbw = ", obuf_len - strlen(obuf) - 1);
  	for (i = 0; i < 8; i++) {
