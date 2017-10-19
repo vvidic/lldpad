@@ -1,6 +1,6 @@
 Description: Fix GCC-7 errors breaking the package build
 Author: Valentin Vidic <Valentin.Vidic@CARNet.hr>
-Last-Update: 2017-09-03
+Last-Update: 2017-10-19
 ---
 This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
 --- a/include/lldp_8021qaz.h
@@ -47,19 +47,19 @@ This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
  	int numargs;
 --- a/lldp_mand.c
 +++ b/lldp_mand.c
-@@ -217,6 +217,7 @@
+@@ -217,6 +217,6 @@
  			if (length > 0)
  				break;
- 			/* Fall through on IP error */
-+			__attribute__ ((fallthrough));
+-			/* Fall through on IP error */
++			/* fallthrough */
  		case CHASSIS_ID_MAC_ADDRESS:
  		default:
  			length = mand_bld_mac_chassis(md, &chassis);
-@@ -234,6 +235,7 @@
+@@ -234,6 +235,6 @@
  			if (length > 0)
  				break;
- 			/* Fall through on IP error */
-+			__attribute__ ((fallthrough));
+-			/* Fall through on IP error */
++			/* fallthrough */
  		case LLDP_MED_DEVTYPE_NETWORK_CONNECTIVITY:
  		default:
  			length =  mand_bld_ifname_chassis(md, &chassis);
@@ -67,7 +67,7 @@ This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
  				 sizeof(portid.sub);
  			break;
  		}
-+		__attribute__ ((fallthrough));
++		/* fallthrough */
  	case PORT_ID_NETWORK_ADDRESS:
  		/* uses ipv4 first */
  		if (!get_ipaddr(md->ifname, &portid.id.na.ip.v4)) {
@@ -75,7 +75,7 @@ This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
  				 sizeof(portid.sub);
  			break;
  		}
-+		__attribute__ ((fallthrough));
++		/* fallthrough */
  	case PORT_ID_INTERFACE_NAME:
  		portid.sub = PORT_ID_INTERFACE_NAME;
  		strncpy((char *)portid.id.ifname, md->ifname, IFNAMSIZ);
@@ -85,7 +85,7 @@ This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
  	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_III:
  	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_II:
  		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_NETWORK_POLICY);
-+		__attribute__ ((fallthrough));
++		/* fallthrough */
  	case LLDP_MED_DEVTYPE_ENDPOINT_CLASS_I:
  	case LLDP_MED_DEVTYPE_NETWORK_CONNECTIVITY:
  		tlv_enabletx(cmd->ifname, cmd->type, (OUI_TIA_TR41 << 8) | LLDP_MED_RESERVED);
@@ -100,3 +100,39 @@ This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
  		snprintf(cat, sizeof(cat), "%i%% ", percent[i]);
  		printf("%i%% ", percent[i]);
  		strncat(obuf, cat, obuf_len - strlen(obuf) - 1);
+--- a/qbg/vdp22.c
++++ b/qbg/vdp22.c
+@@ -455,10 +455,10 @@
+ 		fp->grpid = from->gpid;
+ 		if (fif == VDP22_FFMT_GROUPVID)
+ 			goto vid;
+-		/* Fall through intended */
++		/* fallthrough */
+ 	case VDP22_FFMT_MACVID:
+ 		memcpy(fp->mac, from->mac, sizeof(fp->mac));
+-		/* Fall through intended */
++		/* fallthrough */
+ 	case VDP22_FFMT_VID:
+ vid:
+ 		fp->vlan = vdp22_set_vlanid(from->vlan)
+--- a/qbg/vdp22_cmds.c
++++ b/qbg/vdp22_cmds.c
+@@ -473,6 +473,7 @@
+ 			if (memcmp(p1->mgrid, p2->mgrid,
+ 				   sizeof(p2->mgrid)))
+ 				return false;
++			break;
+ 		case VSI_TYPEID_ARG:
+ 			if (p1->type_id != p2->type_id)
+ 				return false;
+--- a/qbg/vdp22sm.c
++++ b/qbg/vdp22sm.c
+@@ -1521,7 +1521,7 @@
+ 	case VDP22_RESP_DEASSOC:
+ 		if (error > VDP22_STATUS_MASK)
+ 			p->status = VDP22_HARDBIT;
+-		/* Fall through intended */
++		/* fallthrough */
+ 	case VDP22_RESP_SUCCESS:
+ rest:
+ 		p->status |= VDP22_ACKBIT | make_status(error);
