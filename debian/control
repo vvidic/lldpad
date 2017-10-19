@@ -1,5 +1,5 @@
 Source: lldpad
-Priority: extra
+Priority: optional
 Maintainer: Debian FCoE Maintainers <pkg-fcoe-general@lists.alioth.debian.org>
 Uploaders: Liang Guo <bluestonechina@gmail.com>, Jacob Luna Lundberg <jacob@gnifty.net>
 Build-Depends: debhelper (>= 10),
