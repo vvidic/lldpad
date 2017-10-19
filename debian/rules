@@ -13,7 +13,7 @@ include /usr/share/dpkg/buildflags.mk
 
 override_dh_auto_clean:
 	dh_auto_clean
-	-rm parse_cli.c
+	rm -f parse_cli.c
 
 override_dh_auto_install:
 	dh_auto_install
