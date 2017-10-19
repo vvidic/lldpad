@@ -125,6 +125,7 @@ int is_active(const char *ifname);
 int is_bond(const char *ifname);
 int is_san_mac(u8 *addr);
 int is_bridge(const char *ifname);
+int is_bridge_port(const char *ifname);
 int is_vlan(const char *ifname);
 int is_vlan_capable(const char *ifname);
 int is_wlan(const char *ifname);
@@ -142,6 +143,7 @@ int is_autoneg_supported(const char *ifname);
 int get_mtu(const char *);
 int get_mfs(const char *);
 int get_ifflags(const char *);
+int get_ifname(int ifindex, char *ifname);
 int get_maucaps(const char *);
 int get_mautype(const char *);
 int get_ifpflags(const char *);
@@ -169,6 +171,7 @@ int check_link_status(const char *ifname);
 int get_arg_val_list(char *ibuf, int ilen, int *ioff,
 			    char **args, char **argvals);
 int get_arg_list(char *ibuf, int ilen, int *ioff, char **args);
+int get_vsistr_arg_count(int ioff, int ilen);
 
 #define ntohll(x) be64_to_cpu(x)
 #define htonll(x) cpu_to_be64(x)

@@ -1,6 +1,6 @@
 /*******************************************************************************
 
-  LLDP Agent Daemon (LLDPAD) Software 
+  LLDP Agent Daemon (LLDPAD) Software
   Copyright(c) 2007-2010 Intel Corporation.
 
   Substantially modified from:
@@ -73,7 +73,7 @@ struct clif_cmds {
 			   socklen_t fromlen,
 			   char *ibuf, int ilen,
 			   char *rbuf, int rlen);
-};	
+};
 
 static const struct clif_cmds cmd_tbl[] = {
 	{ DCB_CMD,     clif_iface_module },
@@ -117,7 +117,6 @@ int clif_iface_module(struct clif_data *clifd,
 	}
 
 	mod = find_module_by_id(&lldp_head, module_id);
-
 	if (mod && mod->ops && mod->ops->client_cmd)
 		return  (mod->ops->client_cmd)(clifd, from, fromlen,
 			 cmd_start, cmd_len, rbuf+strlen(rbuf), rlen);
@@ -156,17 +155,14 @@ int clif_iface_attach(struct clif_data *clifd,
 	char *tlv, *str, *tokenize;
 	const char *delim = ",";
 	int i, tlv_count = 0;
-	u8 *ptr;
 
 	dst = malloc(sizeof(*dst));
 	if (dst == NULL)
-		return 1;
+		return cmd_failed;
 	memset(dst, 0, sizeof(*dst));
 	memcpy(&dst->addr, from, sizeof(struct sockaddr_un));
 	dst->addrlen = fromlen;
 	dst->debug_level = MSG_INFO;
-	dst->next = clifd->ctrl_dst;
-	clifd->ctrl_dst = dst;
 
 	/*
 	 * There are two cases here one, the user provided
@@ -175,53 +171,57 @@ int clif_iface_attach(struct clif_data *clifd,
 	 * user sent a comma seperated string of tlv module
 	 * ids it expects events from
 	 */
-
 	/* set default string to DCBX Events */
 	if (ibuf[1] == '\0') {
-		u32 hex = LLDP_MOD_DCBX;
-		tlv = malloc(sizeof(char) * (8 + 2));
-		if (!tlv)
+		dst->tlv_types = malloc(sizeof(u32) * 2);
+		if (!dst->tlv_types)
 			goto err_tlv;
-		tlv[0] = 'A';
-		tlv[9] = 0;
-		bin2hexstr((u8*)&hex, 4, &tlv[1], 8);
-	} else
+		dst->tlv_types[0] = LLDP_MOD_DCBX;
+		/* Insert Termination Pattern */
+		dst->tlv_types[1] = ~0;
+	} else {
 		tlv = strdup(ibuf);
-
-	str = tlv;
-	str++;
-	/* Count number of TLV Modules */
-	tokenize = strtok(str, delim);
-	tlv_count++;
-	do {
-		tokenize = strtok(NULL, delim);
+		str = tlv;
+		str++;
+		/* Count number of TLV Modules */
+		tokenize = strtok(str, delim);
 		tlv_count++;
-	} while (tokenize);
-			
-	dst->tlv_types = malloc(sizeof(u32) * tlv_count);
-	if (!dst->tlv_types)
-		goto err_types;
-	memset(dst->tlv_types, 0, sizeof(u32) * tlv_count);
+		do {
+			tokenize = strtok(NULL, delim);
+			tlv_count++;
+		} while (tokenize);
 
-	/* Populate tlv_types from comma separated string */
-	tokenize = strtok(str, delim);
-	for (i=0; tokenize; i++) {
-		ptr = (u8*)&dst->tlv_types[i];
-		hexstr2bin(tokenize, ptr, 4);
-		tokenize = strtok(NULL, delim);
+		dst->tlv_types = malloc(sizeof(u32) * tlv_count);
+		if (!dst->tlv_types)
+			goto err_types;
+		memset(dst->tlv_types, 0, sizeof(u32) * tlv_count);
+
+		/* Populate tlv_types from comma separated string */
+		tokenize = strtok(str, delim);
+		for (i = 0; tokenize; i++) {
+			char *myend;
+
+			dst->tlv_types[i] = strtol(tokenize, &myend, 16);
+			if (*myend)		/* No hexnumber for module id */
+				goto err_types;
+			tokenize = strtok(NULL, delim);
+		}
+		free(tlv);
+		/* Insert Termination Pattern */
+		dst->tlv_types[i] = ~0;
 	}
 
-	/* Insert Termination Pattern */
-	dst->tlv_types[i] = ~0;
-	free(tlv);
-
+	/* Insert new node at beginning */
+	dst->next = clifd->ctrl_dst;
+	clifd->ctrl_dst = dst;
 	LLDPAD_DBG("CTRL_IFACE monitor attached\n");
 	snprintf(rbuf, rlen, "%c", ATTACH_CMD);
 
-	return 0;
+	return cmd_success;
 err_types:
 	free(tlv);
 err_tlv:
+	free(dst);
 	LLDPAD_DBG("CTRL_IFACE monitor attach error\n");
 	snprintf(rbuf, rlen, "%c", ATTACH_CMD);
 
@@ -278,7 +278,7 @@ int clif_iface_level(struct clif_data *clifd,
 	level = ibuf+1;
 	snprintf(rbuf, rlen, "%c", LEVEL_CMD);
 
-	LLDPAD_DBG("CTRL_IFACE LEVEL %s", level);
+	LLDPAD_DBG("CTRL_IFACE LEVEL %s\n", level);
 
 	dst = clifd->ctrl_dst;
 	while (dst) {
@@ -326,7 +326,7 @@ static void process_clif_cmd(  struct clif_data *cd,
 					 rsize - strlen(rbuf) - 1);
 
 	/* update status and compute final length */
-	rbuf[CLIF_STAT_OFF] = hexlist[(status & 0x0f1) >> 4];
+	rbuf[CLIF_STAT_OFF] = hexlist[(status & 0xf0) >> 4];
 	rbuf[CLIF_STAT_OFF+1] = hexlist[status & 0x0f];
 	*rlen = strlen(rbuf);
 }
@@ -371,14 +371,14 @@ static void ctrl_iface_receive(int sock, void *eloop_ctx,
 	cred = (struct ucred *)CMSG_DATA(cmsg);
 
 	if (cmsg == NULL || cmsg->cmsg_type != SCM_CREDENTIALS) {
-		LLDPAD_INFO("%s: No sender credentials, ignoring",
+		LLDPAD_INFO("%s: No sender credentials, ignoring\n",
 			   __FUNCTION__);
 		sprintf(buf,"R%02x", cmd_bad_params);
 		sendto(sock, buf, 3, 0, (struct sockaddr *) &from, fromlen);
 		return;
 	}
 	if (cred->uid != 0) {
-		LLDPAD_INFO("%s: sender uid=%i, ignoring",
+		LLDPAD_INFO("%s: sender uid=%i, ignoring\n",
 			   __FUNCTION__, cred->uid);
 		sprintf(buf,"R%02x", cmd_no_access);
 		sendto(sock, buf, 3, 0, (struct sockaddr *) &from,
@@ -411,6 +411,42 @@ int ctrl_iface_register(struct clif_data *clifd)
 					clifd, NULL);
 }
 
+int ctrl_iface_systemd_socket()
+{
+	char *env, *ptr;
+	unsigned int p, l;
+
+	env = getenv("LISTEN_PID");
+	if (!env)
+		return -1;
+
+	p = strtoul(env, &ptr, 10);
+	if (ptr && ptr == env) {
+		LLDPAD_DBG("Invalid value '%s' for LISTEN_PID\n", env);
+		return -1;
+	}
+	if ((pid_t)p != getpid()) {
+		LLDPAD_DBG("Invalid PID '%d' from LISTEN_PID\n", p);
+		return -1;
+	}
+	env = getenv("LISTEN_FDS");
+	if (!env) {
+		LLDPAD_DBG("LISTEN_FDS is not set\n");
+		return -1;
+	}
+	l = strtoul(env, &ptr, 10);
+	if (ptr && ptr == env) {
+		LLDPAD_INFO("Invalid value '%s' for LISTEN_FDS\n", env);
+		return -1;
+	}
+	if (l != 1) {
+		LLDPAD_INFO("LISTEN_FDS specified %d fds\n", l);
+		return -1;
+	}
+	/* systemd returns fds with an offset of '3' */
+	return 3;
+}
+
 int ctrl_iface_init(struct clif_data *clifd)
 {
 	struct sockaddr_un addr;
@@ -421,9 +457,14 @@ int ctrl_iface_init(struct clif_data *clifd)
 	clifd->ctrl_sock = -1;
 	clifd->ctrl_dst = NULL;
 
+	s = ctrl_iface_systemd_socket();
+	if (s != -1) {
+		LLDPAD_INFO("using fd %d from systemd\n", s);
+		goto out;
+	}
 	s = socket(AF_LOCAL, SOCK_DGRAM, 0);
 	if (s < 0) {
-		perror("socket(AF_LOCAL)");
+		LLDPAD_WARN("failed to create CLI socket: %m\n");
 		goto fail;
 	}
 	/* enable receiving of the sender credentials */
@@ -436,7 +477,10 @@ int ctrl_iface_init(struct clif_data *clifd)
 		 "%s", LLDP_CLIF_SOCK);
 	addrlen = sizeof(sa_family_t) + strlen(addr.sun_path + 1) + 1;
 	if (bind(s, (struct sockaddr *) &addr, addrlen) < 0) {
-		perror("bind(AF_LOCAL)");
+		if (errno == EADDRINUSE)
+			LLDPAD_WARN("another lldpad instance is running\n");
+		else
+			LLDPAD_WARN("failed to bind CLI socket address: %m");
 		goto fail;
 	}
 	/* enable receiving of the sender credentials */
@@ -444,6 +488,7 @@ int ctrl_iface_init(struct clif_data *clifd)
 		   &feature_on, sizeof(feature_on));
 
 	LLDPAD_INFO("bound ctrl iface to %s\n", &addr.sun_path[1]);
+out:
 	clifd->ctrl_sock = s;
 
 	return 0;
@@ -481,7 +526,7 @@ int is_ctrl_listening(struct ctrl_dst *dst, u32 type)
 	u32 term = ~0;
 	u32 all = 0;
 	u32 dcbx = LLDP_MOD_DCBX;
-	
+
 	if (!dst)
 		return 0;
 
@@ -530,8 +575,7 @@ void ctrl_iface_send(struct clif_data *clifd, int level, u32 moduleid,
 		next = dst->next;
 		send = 0;
 		/* Does dst receive these event messages? */
-		send = is_ctrl_listening(dst, moduleid); 
-
+		send = is_ctrl_listening(dst, moduleid);
 		/* Yes */
 		if (send && level >= dst->debug_level) {
 			msg.msg_name = &dst->addr;
@@ -549,6 +593,10 @@ void ctrl_iface_send(struct clif_data *clifd, int level, u32 moduleid,
 						dst->addrlen);
 				}
 			} else {
+				fprintf(stderr,
+					"CTRL_IFACE monitor[%d][%d] %d:%s: ",
+					idx, clifd->ctrl_sock, dst->addrlen,
+					dst->addr.sun_path);
 				dst->errors = 0;
 			}
 		}

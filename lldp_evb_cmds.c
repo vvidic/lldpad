@@ -32,7 +32,7 @@
 
 #include "lldp.h"
 #include "lldp_evb.h"
-#include "lldp_vdp.h"
+#include "qbg_vdp.h"
 #include "lldp_tlv.h"
 #include "lldp_mand_clif.h"
 #include "config.h"
@@ -167,8 +167,12 @@ static int evb_cmdok(struct cmd *cmd, cmd_status expected)
 {
 	if (cmd->cmd != expected)
 		return cmd_invalid;
+
 	switch (cmd->tlvid) {
 	case TLVID_8021Qbg(LLDP_EVB_SUBTYPE):
+		if (cmd->type != NEAREST_CUSTOMER_BRIDGE)
+			return cmd_agent_not_supported;
+
 		return cmd_success;
 	case INVALID_TLVID:
 		return cmd_invalid;
@@ -181,17 +185,19 @@ static int
 get_arg_tlvtxenable(struct cmd *cmd, char *arg, UNUSED char *argvalue,
 		    char *obuf, int obuf_len)
 {
-	struct evb_data *ed;
-	char *s;
 	cmd_status good_cmd = evb_cmdok(cmd, cmd_gettlv);
+	char *s, arg_path[EVB_BUF_SIZE];
+	int value;
 
 	if (good_cmd != cmd_success)
 		return good_cmd;
 
-	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
-	if (ed->txmit)
+	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s",
+		 TLVID_PREFIX, cmd->tlvid, arg);
+	if (get_cfg(cmd->ifname, cmd->type, arg_path, &value, CONFIG_TYPE_BOOL))
+		value = false;
+
+	if (value)
 		s = VAL_YES;
 	else
 		s = VAL_NO;
@@ -221,10 +227,11 @@ static int _set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 		return cmd_bad_params;
 
 	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
-	if (vdp_vsis(ed->ifname))
-		return cmd_failed;
+	if (ed) {
+		if (vdp_vsis(ed->ifname))
+			return cmd_failed;
+	}
+
 	if (test)
 		return cmd_success;
 
@@ -233,12 +240,14 @@ static int _set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 
 	if (set_cfg(cmd->ifname, cmd->type, arg_path, &value,
 		    CONFIG_TYPE_BOOL)){
-		LLDPAD_ERR("%s: error saving EVB enabletx (%s)\n", ed->ifname,
+		LLDPAD_ERR("%s: error saving EVB enabletx (%s)\n", cmd->ifname,
 			   argvalue);
 		return cmd_failed;
 	}
-	ed->txmit = value;
-	LLDPAD_INFO("%s: changed EVB enabletx (%s)\n", ed->ifname, argvalue);
+	if (ed)
+		ed->txmit = value;
+
+	LLDPAD_INFO("%s: changed EVB enabletx (%s)\n", cmd->ifname, argvalue);
 	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
@@ -253,26 +262,37 @@ static int set_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 static int test_arg_tlvtxenable(struct cmd *cmd, char *arg, char *argvalue,
 				UNUSED char *obuf, UNUSED int obuf_len)
 {
+	/*
+	 * Make sure either evb draft 0.2 or evb ratified standard is
+	 * running at the same time but not both.
+	 */
+	if (!strcasecmp(argvalue, VAL_YES)
+	    && is_tlv_txenabled(cmd->ifname, cmd->type,
+				TLVID(OUI_IEEE_8021Qbg22,
+				      LLDP_EVB22_SUBTYPE))) {
+		LLDPAD_ERR("%s:%s evb protocol already enabled\n",
+			   __func__, cmd->ifname);
+		return cmd_failed;
+	}
 	return _set_arg_tlvtxenable(cmd, arg, argvalue, true);
 }
 
 static int get_arg_fmode(struct cmd *cmd, char *arg, UNUSED char *argvalue,
 			 char *obuf, int obuf_len)
 {
-	char *s;
-	struct evb_data *ed;
 	cmd_status good_cmd = evb_cmdok(cmd, cmd_gettlv);
+	char *s;
+	u8 mode;
 
 	if (good_cmd != cmd_success)
 		return good_cmd;
 
-	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
-	if (ed->policy.smode & LLDP_EVB_CAPABILITY_FORWARD_REFLECTIVE_RELAY)
+	mode = evb_conf_fmode(cmd->ifname, cmd->type);
+	if (mode & LLDP_EVB_CAPABILITY_FORWARD_REFLECTIVE_RELAY)
 		s = VAL_EVB_FMODE_REFLECTIVE_RELAY;
 	else
 		s = VAL_EVB_FMODE_BRIDGE;
+
 	snprintf(obuf, obuf_len, "%02x%s%04x%s",
 		 (unsigned int)strlen(arg), arg, (unsigned int)strlen(s), s);
 	return cmd_success;
@@ -296,25 +316,28 @@ static int _set_arg_fmode(struct cmd *cmd, const char *argvalue, bool test)
 		return cmd_bad_params;
 
 	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
-	if (vdp_vsis(ed->ifname))
-		return cmd_failed;
+	if (ed) {
+		if (vdp_vsis(ed->ifname))
+			return cmd_failed;
+	}
+
 	if (test)
 		return cmd_success;
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.fmode",
 		 TLVID_PREFIX, cmd->tlvid);
 
-	if (set_cfg(ed->ifname, cmd->type, arg_path, &argvalue,
+	if (set_cfg(cmd->ifname, cmd->type, arg_path, &argvalue,
 		    CONFIG_TYPE_STRING)) {
 		LLDPAD_ERR("%s: saving EVB forwarding mode failed\n",
-			   ed->ifname);
+			   cmd->ifname);
 		return cmd_failed;
 	}
 
-	ed->policy.smode = smode;
-	LLDPAD_INFO("%s: changed EVB forwarding mode (%s)\n", ed->ifname,
+	if (ed)
+		ed->policy.smode = smode;
+
+	LLDPAD_INFO("%s: changed EVB forwarding mode (%s)\n", cmd->ifname,
 		    argvalue);
 	somethingChangedLocal(cmd->ifname, cmd->type);
 	return cmd_success;
@@ -338,27 +361,25 @@ get_arg_capabilities(struct cmd *cmd, char *arg, UNUSED char *argvalue,
 {
 	int comma = 0;
 	char t[EVB_BUF_SIZE];
-	struct evb_data *ed;
+	u8 scap;
 	cmd_status good_cmd = evb_cmdok(cmd, cmd_gettlv);
 
 	if (good_cmd != cmd_success)
 		return good_cmd;
-	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
 
+	scap = evb_conf_capa(cmd->ifname, cmd->type);
 	memset(t, 0, sizeof t);
-	if (ed->policy.scap & LLDP_EVB_CAPABILITY_PROTOCOL_RTE) {
+	if (scap & LLDP_EVB_CAPABILITY_PROTOCOL_RTE) {
 		strcat(t, VAL_EVB_CAPA_RTE);
 		comma = 1;
 	}
-	if (ed->policy.scap & LLDP_EVB_CAPABILITY_PROTOCOL_ECP) {
+	if (scap & LLDP_EVB_CAPABILITY_PROTOCOL_ECP) {
 		if (comma)
 			strcat(t, " ");
 		strcat(t, VAL_EVB_CAPA_ECP);
 		comma = 1;
 	}
-	if (ed->policy.scap & LLDP_EVB_CAPABILITY_PROTOCOL_VDP) {
+	if (scap & LLDP_EVB_CAPABILITY_PROTOCOL_VDP) {
 		if (comma)
 			strcat(t, " ");
 		strcat(t, VAL_EVB_CAPA_VDP);
@@ -415,25 +436,25 @@ _set_arg_capabilities(struct cmd *cmd, const char *argvalue, bool test)
 		return cmd_bad_params;
 
 	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
-	if (vdp_vsis(ed->ifname))
-		return cmd_failed;
+	if (ed)
+		if (vdp_vsis(ed->ifname))
+			return cmd_failed;
 	if (test)
 		return cmd_success;
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.capabilities",
 		 TLVID_PREFIX, cmd->tlvid);
 
-	if (set_cfg(ed->ifname, cmd->type, arg_path, &argvalue,
+	if (set_cfg(cmd->ifname, cmd->type, arg_path, &argvalue,
 		    CONFIG_TYPE_STRING)) {
 		LLDPAD_ERR("%s: saving EVB capabilities (%#x) failed\n",
-			ed->ifname, scap);
+			cmd->ifname, scap);
 		return cmd_failed;
 	}
 
-	ed->policy.scap = scap;
-	LLDPAD_INFO("%s: changed EVB capabilities (%#x)\n", ed->ifname, scap);
+	if (ed)
+		ed->policy.scap = scap;
+	LLDPAD_INFO("%s: changed EVB capabilities (%#x)\n", cmd->ifname, scap);
 	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
@@ -457,17 +478,15 @@ static int get_arg_rte(struct cmd *cmd, char *arg, UNUSED char *argvalue,
 		       char *obuf, int obuf_len)
 {
 	char s[EVB_BUF_SIZE];
-	struct evb_data *ed;
+	u8 rte;
 	cmd_status good_cmd = evb_cmdok(cmd, cmd_gettlv);
 
 	if (good_cmd != cmd_success)
 		return good_cmd;
 
-	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
+	rte = evb_conf_rte(cmd->ifname, cmd->type);
 
-	if (sprintf(s, "%i", ed->policy.rte) <= 0)
+	if (sprintf(s, "%i", rte) <= 0)
 		return cmd_invalid;
 
 	snprintf(obuf, obuf_len, "%02x%s%04x%s",
@@ -491,24 +510,24 @@ static int _set_arg_rte(struct cmd *cmd, const char *argvalue, bool test)
 		return cmd_bad_params;
 
 	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
-	if (vdp_vsis(ed->ifname))
-		return cmd_failed;
+	if (ed)
+		if (vdp_vsis(ed->ifname))
+			return cmd_failed;
 	if (test)
 		return cmd_success;
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.rte", TLVID_PREFIX,
 		 cmd->tlvid);
-	if (set_cfg(ed->ifname, cmd->type, arg_path, &argvalue,
+	if (set_cfg(cmd->ifname, cmd->type, arg_path, &argvalue,
 		    CONFIG_TYPE_STRING)){
-		LLDPAD_ERR("%s: error saving EVB rte (%d)\n", ed->ifname,
+		LLDPAD_ERR("%s: error saving EVB rte (%d)\n", cmd->ifname,
 			   value);
 		return cmd_failed;
 	}
 
-	ed->policy.rte = value;
-	LLDPAD_INFO("%s: changed EVB rte (%#x)\n", ed->ifname, value);
+	if (ed)
+		ed->policy.rte = value;
+	LLDPAD_INFO("%s: changed EVB rte (%#x)\n", cmd->ifname, value);
 	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;
@@ -530,16 +549,15 @@ static int get_arg_vsis(struct cmd *cmd, char *arg, UNUSED char *argvalue,
 			char *obuf, int obuf_len)
 {
 	char s[EVB_BUF_SIZE];
-	struct evb_data *ed;
+	u16 svsi;
 	cmd_status good_cmd = evb_cmdok(cmd, cmd_gettlv);
 
 	if (good_cmd != cmd_success)
 		return good_cmd;
 
-	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
-	if (sprintf(s, "%04i", ed->policy.svsi) <= 0)
+	svsi = evb_conf_vsis(cmd->ifname, cmd->type);
+
+	if (sprintf(s, "%04i", svsi) <= 0)
 		return cmd_invalid;
 	snprintf(obuf, obuf_len, "%02x%s%04x%s",
 		 (unsigned int)strlen(arg), arg, (unsigned int)strlen(s), s);
@@ -561,24 +579,24 @@ static int _set_arg_vsis(struct cmd *cmd, const char *argvalue, bool test)
 		return cmd_bad_params;
 
 	ed = evb_data((char *) &cmd->ifname, cmd->type);
-	if (!ed)
-		return cmd_invalid;
-	if (vdp_vsis(ed->ifname))
-		return cmd_failed;
+	if (ed)
+		if (vdp_vsis(ed->ifname))
+			return cmd_failed;
 	if (test)
 		return cmd_success;
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.vsis", TLVID_PREFIX,
 		 cmd->tlvid);
-	if (set_cfg(ed->ifname, cmd->type, arg_path, &argvalue,
+	if (set_cfg(cmd->ifname, cmd->type, arg_path, &argvalue,
 		    CONFIG_TYPE_STRING)){
-		LLDPAD_ERR("%s: error saving EVB vsi (%d)\n", ed->ifname,
+		LLDPAD_ERR("%s: error saving EVB vsi (%d)\n", cmd->ifname,
 			   value);
 		return cmd_failed;
 	}
 
-	ed->policy.svsi = htons(value);
-	LLDPAD_INFO("%s: changed EVB vsis (%#x)\n", ed->ifname, value);
+	if (ed)
+		ed->policy.svsi = htons(value);
+	LLDPAD_INFO("%s: changed EVB vsis (%#x)\n", cmd->ifname, value);
 	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return cmd_success;

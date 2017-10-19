@@ -58,6 +58,11 @@ static int get_mand_subtype(struct cmd *, char *, char *, char *, int);
 static int set_mand_subtype(struct cmd *, char *, char *, char *, int);
 static int test_mand_subtype(struct cmd *, char *, char *, char *, int);
 
+
+static int get_mand_ttl_value(struct cmd *, char *, char *, char *, int);
+static int set_mand_ttl_value(struct cmd *, char *, char *, char *, int);
+static int test_mand_ttl_value(struct cmd *, char *, char *, char *, int);
+
 static struct arg_handlers arg_handlers[] = {
 	{	.arg = ARG_ADMINSTATUS, .arg_class = LLDP_ARG,
 		.handle_get = get_arg_adminstatus,
@@ -72,22 +77,22 @@ static struct arg_handlers arg_handlers[] = {
 		.handle_get = get_mand_subtype,
 		.handle_set = set_mand_subtype,
 		.handle_test = test_mand_subtype, },
+	{	.arg = ARG_TTL_VALUE,
+		.arg_class = TLV_ARG,
+		.handle_get = get_mand_ttl_value,
+		.handle_set = set_mand_ttl_value,
+		.handle_test = test_mand_ttl_value, },
 	{	.arg = 0 }
 };
 
 static int get_mand_subtype(struct cmd *cmd, char *arg, UNUSED char *argvalue,
 			    char *obuf, int obuf_len)
 {
-	struct mand_data *md;
 	int subtype;
 	char *string, arg_path[256];
 
 	if (cmd->cmd != cmd_gettlv)
 		return cmd_invalid;
-
-	md = mand_data(cmd->ifname, cmd->type);
-	if (!md)
-		return cmd_device_not_found;
 
 	switch (cmd->tlvid) {
 	case CHASSIS_ID_TLV:
@@ -183,8 +188,6 @@ static int _set_mand_subtype(struct cmd *cmd, char *arg, char *argvalue,
 		return cmd_invalid;
 
 	md = mand_data(cmd->ifname, cmd->type);
-	if (!md)
-		return cmd_device_not_found;
 
 	switch (cmd->tlvid) {
 	case CHASSIS_ID_TLV:
@@ -261,9 +264,11 @@ static int _set_mand_subtype(struct cmd *cmd, char *arg, char *argvalue,
 	if (test)
 		return cmd_success;
 
-	md->read_shm = 1;
-	md->rebuild_chassis = 1;
-	md->rebuild_portid = 1;
+	if (md) {
+		md->read_shm = 1;
+		md->rebuild_chassis = 1;
+		md->rebuild_portid = 1;
+	}
 
 	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
 		 cmd->tlvid, arg);
@@ -274,6 +279,86 @@ static int _set_mand_subtype(struct cmd *cmd, char *arg, char *argvalue,
 	somethingChangedLocal(cmd->ifname, cmd->type);
 
 	return 0;
+}
+
+static int get_mand_ttl_value(struct cmd *cmd, char *arg,
+		UNUSED char *argvalue, char *obuf, int obuf_len)
+{
+	int ttl_val;
+	char string[8], arg_path[256];
+
+	if (cmd->cmd != cmd_gettlv)
+		return cmd_invalid;
+
+	switch (cmd->tlvid) {
+	case TIME_TO_LIVE_TLV:
+		snprintf(arg_path, sizeof(arg_path), "%s%08x.%s",
+			 TLVID_PREFIX, TLVID_NOUI(TIME_TO_LIVE_TLV),
+			 ARG_TTL_VALUE);
+		get_config_setting(cmd->ifname, cmd->type, arg_path,
+				   &ttl_val, CONFIG_TYPE_INT);
+		break;
+	case INVALID_TLVID:
+		return cmd_invalid;
+	default:
+		return cmd_not_applicable;
+	}
+
+	snprintf(string, sizeof(string), "%d", ttl_val);
+	snprintf(obuf, obuf_len, "%02x%s%04x%s",
+		 (unsigned int) strlen(arg), arg,
+		 (unsigned int)strlen(string), string);
+
+	return 0;
+}
+
+static int _set_mand_ttl_value(struct cmd *cmd, char *arg, char *argvalue,
+			     char *obuf, int obuf_len, bool test)
+{
+	int ttl_val;
+	char *end;
+	char arg_path[256];
+
+	if (cmd->cmd != cmd_settlv)
+		return cmd_invalid;
+
+	switch (cmd->tlvid) {
+	case TIME_TO_LIVE_TLV:
+		break;
+	case INVALID_TLVID:
+		return cmd_invalid;
+	default:
+		return cmd_not_applicable;
+	}
+
+	ttl_val = strtoul(argvalue, &end, 0);
+	if ((*end) || (TTL_MIN_VAL > ttl_val) || (ttl_val > TTL_MAX_VAL))
+		return cmd_bad_params;
+
+	if (test)
+		return cmd_success;
+
+	snprintf(arg_path, sizeof(arg_path), "%s%08x.%s", TLVID_PREFIX,
+			cmd->tlvid, arg);
+	snprintf(obuf, obuf_len, "%s=%s\n", arg, argvalue);
+	set_config_setting(cmd->ifname, cmd->type,
+			arg_path, &ttl_val, CONFIG_TYPE_INT);
+
+	mand_update_ttl(cmd->ifname, ttl_val);
+
+	return 0;
+}
+
+static int set_mand_ttl_value(struct cmd *cmd, char *arg, char *argvalue,
+		char *obuf, int obuf_len)
+{
+	return _set_mand_ttl_value(cmd, arg, argvalue, obuf, obuf_len, false);
+}
+
+static int test_mand_ttl_value(struct cmd *cmd, char *arg, char *argvalue,
+		char *obuf, int obuf_len)
+{
+	return _set_mand_ttl_value(cmd, arg, argvalue, obuf, obuf_len, true);
 }
 
 static int set_mand_subtype(struct cmd *cmd, char *arg, char *argvalue,
@@ -570,6 +655,10 @@ int get_tlvs(struct cmd *cmd, char *rbuf, int rlen)
 	u16 type, len;
 	int res;
 
+	/* VDP 0.2 protocol for nearest customer bridge only */
+	if (cmd->tlvid == (OUI_IEEE_8021Qbg << 8)
+	    && cmd->type != NEAREST_CUSTOMER_BRIDGE)
+		return cmd_agent_not_supported;
 	if (cmd->ops & op_local) {
 		res = get_local_tlvs(cmd->ifname, cmd->type, &tlvs[0], &size);
 		if (res)
@@ -652,7 +741,6 @@ int mand_clif_cmd(UNUSED void  *data,
 		  char *rbuf, int rlen)
 {
 	struct cmd cmd;
-	struct port *port;
 	u8 len, version;
 	int ioff, roff;
 	int rstatus = cmd_invalid;
@@ -727,9 +815,8 @@ int mand_clif_cmd(UNUSED void  *data,
 		(unsigned int)strlen(cmd.ifname), cmd.ifname);
 	roff = strlen(rbuf);
 
-	/* Confirm port is a lldpad managed port */
-	port = port_find_by_name(cmd.ifname);
-	if (!port) {
+	/* Confirm port is a valid LLDP port */
+	if (!get_ifidx(cmd.ifname) || !is_valid_lldp_device(cmd.ifname)) {
 		free(argvals);
 		free(args);
 		return cmd_device_not_found;
