@@ -1,3 +1,32 @@
+lldpad (1.0.1+git20150824.036e314-1) unstable; urgency=medium
+
+  [ Ritesh Raj Sarraf ]
+  * Remove myself from uploaders
+
+  [ Valentin Vidic ]
+  * Add patch to fix FTBFS with GCC-7 (Closes: #853521)
+  * Update to debhelper level 10
+  * Add lsb-base to Depends
+  * Update Standards-Version to 4.0.0
+  * Install bash completion in /usr/share/bash-completion/completions
+  * Package all installed files
+  * Handle init script management automatically
+  * New upstream version 1.0.1+git20150824.036e314
+  * Refresh patches for new upstream version
+  * Replace Priority extra with optional
+  * Update Standards-Version
+  * Add myself to Uploaders
+  * Package library manpage
+  * Fix installation of init and systemd services
+  * Fix location of bash completions
+  * Drop unused patches
+  * Update patch to fix gcc warnings
+  * Add patches for lintian warnings
+  * Remove /var/lib/lldpad on purge
+  * Fix cleanup of parse_cli.c
+
+ -- Valentin Vidic <Valentin.Vidic@CARNet.hr>  Thu, 19 Oct 2017 19:43:46 +0200
+
 lldpad (0.9.46-3) unstable; urgency=low
 
   * Added myself as a maintainer of this package.
