@@ -9,7 +9,7 @@ Build-Depends: debhelper (>= 10),
  flex,
  libreadline-dev,
  dpkg-dev (>= 1.16.1~)
-Standards-Version: 4.0.0
+Standards-Version: 4.1.1
 Section: net
 Homepage: http://open-lldp.org/
 Vcs-Git: git://anonscm.debian.org/pkg-fcoe/lldpad.git
