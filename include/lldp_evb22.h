@@ -27,7 +27,7 @@
 #define _LLDP_EVB22_H
 
 #include "lldp_mod.h"
-#include "lldp_qbg22.h"
+#include "qbg22.h"
 
 #define LLDP_MOD_EVB22_SUBTYPE	0xd
 #define LLDP_MOD_EVB22_OUI	{ 0x00, 0x80, 0xc2, LLDP_MOD_EVB22_SUBTYPE }
@@ -38,9 +38,9 @@ enum {				/* EVB bit definitions defines */
 	EVB_RRCTR = 0x1,	/* Bridge reflective relay control */
 	EVB_SGID = 0x8,		/* Station group ID */
 	EVB_RRREQ = 0x4,	/* Station reflective relay request */
-	EVB_RRSTAT_YES = 0x2,	/* Station reflective relay status TRUE */
+	EVB_RRSTAT_YES = 0x1,	/* Station reflective relay status TRUE */
 	EVB_RRSTAT_NO = 0x0,	/* Station reflective relay status NO */
-	EVB_RRSTAT_DONT = 0x1,	/* Station reflective relay status unknown */
+	EVB_RRSTAT_DONT = 0x3,	/* Station reflective relay status unknown */
 	EVB_ROL = 0x20,		/* Remote or local indicator */
 	EVB_BRIDGE = 0x1,	/* EVB Bridge */
 	EVB_STATION = 0x2	/* EVB Station */

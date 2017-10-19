@@ -199,7 +199,7 @@ int is_bond(const char *ifname)
  */
 int is_san_mac(u8 *addr)
 {
-	int i; 
+	int i;
 
 	for ( i = 0; i < ETH_ALEN; i++) {
 		if ( addr[i]!= 0xff )
@@ -215,7 +215,7 @@ int is_san_mac(u8 *addr)
  *	@addr: address of buffer in which to return the selected MAC address
  *
  *	Checks to see if ifname is a slave of the bond port.  If it is,
- *	then a 
+ *	then a
  *	Returns 0 if a source MAC from the bond could not be found. 1 is
  *	returned if the slave was found in the bond.  addr is updated with
  *	the source MAC that should be used.
@@ -287,7 +287,7 @@ int	get_src_mac_from_bond(struct port *bond_port, char *ifname, u8 *addr)
 
 	switch (ifb.bond_mode) {
 	case BOND_MODE_ACTIVEBACKUP:
-		/* If current port is not the active slave, then 
+		/* If current port is not the active slave, then
 		 * if the bond MAC is equal to the port's
 		 * permanent MAC, then find and return
 		 * the permanent MAC of the active
@@ -297,7 +297,7 @@ int	get_src_mac_from_bond(struct port *bond_port, char *ifname, u8 *addr)
 		if (strncmp(ifname, act_ifname, IFNAMSIZ))
 			if (get_perm_hwaddr(ifname, addr, san_mac) == 0)
 				if (!memcmp(bond_mac, addr, ETH_ALEN))
-					get_perm_hwaddr(act_ifname, addr, 
+					get_perm_hwaddr(act_ifname, addr,
 								san_mac);
 		break;
 	default:
@@ -308,9 +308,17 @@ int	get_src_mac_from_bond(struct port *bond_port, char *ifname, u8 *addr)
 	return 1;
 }
 
+/*
+ * Return true if the mac address is valid (non-zero and no hardware
+ * broadcast address)
+ */
 int is_valid_mac(const u8 *mac)
 {
-	return !!(mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]);
+	if (0 == (mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]))
+		return 0;
+	if (0xff == (mac[0] & mac[1] & mac[2] & mac[3] & mac[4] & mac[5]))
+		return 0;
+	return 1;
 }
 
 int read_int(const char *path)
@@ -338,7 +346,7 @@ int get_ifflags(const char *ifname)
 	int flags = 0;
 	struct ifreq ifr;
 
-	/* use ioctl */	
+	/* use ioctl */
 	fd = get_ioctl_socket();
 	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
@@ -349,13 +357,32 @@ int get_ifflags(const char *ifname)
 	return flags;
 }
 
+int get_ifname(int ifindex, char *ifname)
+{
+	int fd;
+	int rc;
+	struct ifreq ifr;
+
+	memset(&ifr, 0, sizeof(ifr));
+	fd = get_ioctl_socket();
+	if (fd < 0)
+		return -1;
+
+	ifr.ifr_ifindex = ifindex;
+	rc = ioctl(fd, SIOCGIFNAME, &ifr);
+	if (rc >= 0)
+		memcpy(ifname, ifr.ifr_name, IFNAMSIZ);
+
+	return rc;
+}
+
 int get_ifpflags(const char *ifname)
 {
 	int fd;
 	int flags = 0;
 	struct ifreq ifr;
 
-	/* use ioctl */	
+	/* use ioctl */
 	fd = get_ioctl_socket();
 	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
@@ -390,7 +417,7 @@ int get_iflink(const char *ifname)
 	snprintf(path, sizeof(path), "/sys/class/net/%s/iflink", ifname);
 	return read_int(path);
 }
-	
+
 int is_ether(const char *ifname)
 {
 	/* check for bridge in sysfs */
@@ -459,7 +486,7 @@ int is_slave(const char *ifmaster, const char *ifslave)
 			}
 		}
 	}
-	
+
 out_done:
 	return rc;
 }
@@ -535,13 +562,13 @@ int is_bridge(const char *ifname)
 	if (dirp) {
 		closedir(dirp);
 		rc = 1;
-	} else { 
-		/* use ioctl */	
+	} else {
+		/* use ioctl */
 		fd = get_ioctl_socket();
 		if (fd >= 0) {
 			struct ifreq ifr;
 			struct __bridge_info bi;
-			unsigned long args[4] = { BRCTL_GET_BRIDGE_INFO, 
+			unsigned long args[4] = { BRCTL_GET_BRIDGE_INFO,
 						 (unsigned long) &bi, 0, 0 };
 
 			ifr.ifr_data = (char *)args;
@@ -550,6 +577,26 @@ int is_bridge(const char *ifname)
 				rc = 1;
 		}
 	}
+	return rc;
+}
+
+int is_bridge_port(const char *ifname)
+{
+	int rc = 0;
+	char path[256];
+	DIR *dirp;
+
+	if (!is_ether(ifname)) {
+		return 0;
+	}
+	/* check if the given ifname is a bridge port in sysfs */
+	snprintf(path, sizeof(path), "/sys/class/net/%s/brport/", ifname);
+	dirp = opendir(path);
+	if (dirp) {
+		closedir(dirp);
+		rc = 1;
+	}
+
 	return rc;
 }
 
@@ -721,7 +768,7 @@ int is_autoneg_supported(const char *ifname)
 	int fd;
 	struct ifreq ifr;
 	struct ethtool_cmd cmd;
-	
+
 	fd = get_ioctl_socket();
 	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
@@ -742,7 +789,7 @@ int is_autoneg_enabled(const char *ifname)
 	int fd;
 	struct ifreq ifr;
 	struct ethtool_cmd cmd;
-	
+
 	fd = get_ioctl_socket();
 	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
@@ -779,7 +826,7 @@ int get_maucaps(const char *ifname)
 	u16 caps = MAUCAPADV_bOther;
 	struct ifreq ifr;
 	struct ethtool_cmd cmd;
-	
+
 	fd = get_ioctl_socket();
 	if (fd >= 0) {
 		memset(&ifr, 0, sizeof(ifr));
@@ -913,9 +960,9 @@ u16 get_caps(const char *ifname)
 
 	/* how to find TPID to determine C-VLAN vs. S-VLAN ? */
 	if (is_vlan(ifname))
-		caps |= SYSCAP_CVLAN; 
+		caps |= SYSCAP_CVLAN;
 
-	if (is_bridge(ifname))
+	if (is_bridge_port(ifname))
 		caps |= SYSCAP_BRIDGE;
 
 	if (is_router())
@@ -1185,7 +1232,7 @@ int get_arg_val_list(char *ibuf, int ilen, int *ioff,
 			*ioff += arglen;
 			*(arglens+i) = arglen;
 
-			if (ilen - *ioff > 2 * (int)sizeof(argvalue_len)) {
+			if (ilen - *ioff >= 2 * (int)sizeof(argvalue_len)) {
 				hexstr2bin(ibuf+*ioff, (u8 *)&argvalue_len,
 					   sizeof(argvalue_len));
 				argvalue_len = ntohs(argvalue_len);
@@ -1253,5 +1300,27 @@ int get_arg_list(char *ibuf, int ilen, int *ioff, char **args)
 		args[i][*(arglens+i)] = '\0';
 
 	free(arglens);
+	return numargs;
+}
+
+/*
+ * This functionality can be seen in many places to convert a LenData to a
+ * argument array.
+ */
+
+int get_vsistr_arg_count(int ioff, int ilen)
+{
+	int offset;
+	int numargs;
+
+	offset = ioff;
+	for (numargs = 0; (ilen - offset) > 2; numargs++) {
+		offset += 2;
+		if (ilen - offset > 0) {
+			offset++;
+			if (ilen - offset > 4)
+				offset += 4;
+		}
+	}
 	return numargs;
 }

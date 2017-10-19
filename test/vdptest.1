@@ -1,5 +1,5 @@
 .PU
-.TH vdptest 1 "LLDPAD" "Revision: 0.1"
+.TH vdptest 1 "LLDPAD" "Revision: 0.2"
 .SH NAME
 vdptest \- VDP/VSI Protocol Test Program for LLDPAD
 .SH SYNOPSIS
@@ -89,12 +89,16 @@ terminates.
 .br
 .B vdptest
 should be used for testing and debug purposes only.
+It should be noted that there is no state stored in vdptest between calls, but
+will be stored in lldpad (until the process restarts).
+A profile must be created and acted upon on in the same vdptest command.
 .SS Profiles
 .br
 Profile is a comma separated list of key '=' value
 pairs describing the VSI profile data.
 Profiles consists of the following keywords,
-they are all mandatory:
+they are all mandatory with the execption of 
+hints:
 .TP
 name:
 Defines the name of the entry.
@@ -105,9 +109,19 @@ starting
 with a character.
 .TP
 mgrid:
-Defines the manager identifier for this entry.
+Defines the 1 byte manager identifier for this entry
+as defined by the IEEE 802.1 Qbg draft version 0.2.
 The value should be a number in the
 range of 0..255 inclusive.
+.TP
+2mgrid:
+Defines the 16 byte manager identifier for this entry
+as defined by the  IEEE 802.1 Qbg ratified standard.
+Either the 
+.B mgrid
+or the
+.B 2mgrid
+should be used for an entry.
 .TP
 typeid:
 Defines the type identifier for this entry.
@@ -130,26 +144,77 @@ The string is converted into 16 byte UUID
 with 2 nibbles converted into one byte.
 .TP
 map:
-Defines a VLAN-MAC address pair for this entry.
+Defines a VLAN-MAC-GROUP address triple for this entry.
 The value is of the following format:
 .EX
-vlanid-aa:bb:cc:dd:ee:ff
+vlanid[/newvid][-[aa:bb:cc:dd:ee:ff][-grid]]
 .EE
 Vlandid is converted into a number ranging
-from 0..4095.
-Following the vlanid is a dash (\-) and
-an MAC address. 
+from 0..65535.
+If the vlanid is followed by an option slash ('/') 
+the number following the slash is the new vlan identifier
+expected from the switch.
+Following the vlanid is an optional dash (\-) and
+a MAC address. 
 The MAC address is a 6 byte value, each byte
 delimited by a colon (':').
+A second optional dash (\-) can be
+specified to supply a group identifier.
+If omitted the group identifier is assumed to
+be zero and is ignored.
 This keyword can be listed several times to allow
-multiple MAC-VLAN pairs per entry.
+multiple MAC-VLAN-GROUP triples per entry.
+.sp 1
+The form of this entry determines the format of the
+filter information data send to the switch.
+The input
+.EX
+map=1
+.EE
+is converted to filter information format
+.IR VID .
+The input
+.EX
+map=1--123
+.EE
+is converted to filter information format
+.IR GROUP/VID .
+The input
+.EX
+map=1-11:22:33:44:55:66
+.EE
+is converted to filter information format
+.IR VID/MAC .
+The input
+.EX
+map=1-11:22:33:44:55:66-123
+.EE
+is converted to filter information format
+.IR GROUP/VID/MAC .
+Note that filter information formats can not be mixed in
+a single entry. Multiple
+map entries have to be of the same format.
+.TP
+hints:
+This keyword is optional and if omitted defaults to
+.IR none .
+Indicates support for IEEE 802.1 Qbg ratified standard
+virtual machine migration.
+Valid keywords are
+.I none
+(no indicate no migration support),
+.I to
+(to indicate the virtual machine is migrating to this VSI)
+and
+.I from
+(to indicate the virtual machine is migrating from this VSI).
 .TP
 Example:
 Here is an example of a profile definition:
 .EX
-name=thomas2,mgrid=1,typeid=123452,typeidver=1,\(rs
+name=thomas2,mgrid=1,typeid=123452,typeidver=1,hints=none\(rs
 	uuid=a1412857-60f7-4ce1-e95a-2164943f53dd,\(rs
-	map=2-52:54:00:8e:50:53
+	map=2-52:54:00:8e:50:53-9999,map=0/10-52:54:00:8e:50:54-8888
 .EE
 .SS Commands
 Command is  an option character followed
@@ -272,12 +337,12 @@ Several definitions using the same
 .I name
 are not allowed.
 .TP
-.B "\-C\fIname,new=new-name,changes\fP"
+.B "\-C\fInew=new-name,name=old-name,changes\fP"
 Copy the profile entry named
-.I name
-and assign it
+.I old-name
+and assign it to
 .IR new-name.
-After the first comma, list the fields which 
+After the second comma list the fields which 
 are to be changed using the same syntax as in 
 the profile definition.
 If an error is encountered during keyword parsing
@@ -401,15 +466,11 @@ flag. If this option is not set then the following default values
 are used: delaytime (1 second), waittime (1 second) and number of acknowledgements
 reads (1).
 .SH "EXAMPLES"
-.EX
-vdptest -Aname=thomas2,mgrid=1,typeid=123452,typeidver=1,
-	uuid=a1412857-60f7-4ce1-e95a-2164943f53dd,map=2-52:54:00:8e:50:53 -S
-.EE
-.sp 1
 Define a profile and show its definition.
 .sp 1
 .EX
-vdptest -C thomas2,new=unknown,typeid=99999
+vdptest -Aname=thomas2,mgrid=1,typeid=123452,typeidver=1,
+	uuid=a1412857-60f7-4ce1-e95a-2164943f53dd,map=2-52:54:00:8e:50:53 -S
 .EE
 .sp 1
 Copies the entry named
@@ -425,7 +486,7 @@ is the
 field.
 .sp 1
 .EX
-vdptest -i eth2 -F vdptest.cfg -a unknown,w=10,r=2,e=3 -s
+vdptest -Cnew=unknown,name=thomas2,typeid=99999
 .EE
 .sp 1
 Use interface eth2 and read the VSI configuration from file
@@ -434,12 +495,13 @@ Use the VSI definition named
 .I unknown
 and send an ASSOCIATION command to the switch.
 Wait up to 10 seconds for the status confirmation 2
-times and expected the error code 3 from the switch.
+times and expected the error code 3 from the switch
+(NOTE that this will cause vdptest to return FAILURE under
+normal conditions).
 Wait one second before termintation.
 .sp 1
 .EX
-vdptest -i eth2 -F vdptest.cfg -Cthomas2,new=x1,mgrid=2 \(rs
-	-athomas2,w=10,r=2,e=3 -s -a x1,w=5
+vdptest -i eth2 -F vdptest.cfg -a unknown,w=10,r=2,e=3 -s
 .EE
 .sp 1
 Use interface eth2 and read the VSI configuration from file
@@ -455,12 +517,17 @@ Send an ASSOCIATION command with parameters stored in
 wait one second and
 send an ASSOCIATION command with parameters stored in 
 .IR x1 .
+.sp 1
+.EX
+vdptest -i eth2 -F vdptest.cfg -Cnew=x1,name=thomas2,2mgrid=blabla \(rs
+	-a thomas2,w=10,r=2,e=3 -s -a x1,w=5
+.EE
 .SH FILES
-/var/run/lldpad.pid
+/var/run/lldpad.pid, /var/lib/lldpad/lldpad.conf
 .SH "ENVIRONMENT"
-Linux RHEL
+Linux
 .SH "SEE ALSO"
-lldpad(8), lldptool(8)
+lldpad(8), lldptool(8), libvirtd(8)
 .SH DIAGNOSTICS
 Exit status is zero on success and non zero on failure or mismatch.
 .SH AUTHOR

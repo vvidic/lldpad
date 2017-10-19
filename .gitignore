@@ -1,3 +1,5 @@
+*/.dirstamp
+compile
 parse_cli.c
 *.o
 *.lo
@@ -29,6 +31,7 @@ missing
 dcbtool
 lldpad
 lldptool
+vdptool
 nltest
 vdptest
 qbg22sim

@@ -48,7 +48,7 @@
 #include "lldp_dcbx_clif.h"
 #include "lldp_evb22_clif.h"
 #include "lldp_evb_clif.h"
-#include "lldp_vdp_clif.h"
+#include "qbg_vdp_clif.h"
 #include "lldp_8021qaz_clif.h"
 #include "lldp_orgspec_clif.h"
 #include "lldp_cisco_clif.h"
@@ -497,12 +497,15 @@ static int request(struct clif *clif, int argc, char *argv[])
 			break;
 		case 'g':
 			if (!strcasecmp(optarg, "nearestbridge") ||
+			    !strcasecmp(optarg, "nearest_bridge") ||
 			    !strcasecmp(optarg, "nb"))
 				command.type = NEAREST_BRIDGE;
 			else if (!strcasecmp(optarg, "nearestcustomerbridge") ||
+				 !strcasecmp(optarg, "nearest_customer_bridge") ||
 				 !strcasecmp(optarg, "ncb"))
 				command.type = NEAREST_CUSTOMER_BRIDGE;
-			else if (!strcasecmp(optarg, "nearestnontmprbridge") ||
+			else if (!strcasecmp(optarg, "nearestnontpmrbridge") ||
+				 !strcasecmp(optarg, "nearest_nontpmr_bridge") ||
 				 !strcasecmp(optarg, "nntpmrb"))
 				command.type = NEAREST_NONTPMR_BRIDGE;
 			else {

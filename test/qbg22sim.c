@@ -59,7 +59,7 @@
 #define	MYDEBUG		0
 #define	DIM(x)		(sizeof(x)/sizeof(x[0]))
 #define ETH_P_LLDP	0x88cc
-#define ETH_P_ECP	0x8890
+#define ETH_P_ECP	0x8940
 #define MACSTR		"%02x:%02x:%02x:%02x:%02x:%02x"
 #define MAC2STR(a)	(a)[0] & 0xff, (a)[1] & 0xff, (a)[2] & 0xff, \
 			(a)[3] & 0xff, (a)[4] & 0xff, (a)[5] & 0xff
@@ -70,7 +70,7 @@
 
 static char *progname;
 static unsigned char eth_p_lldp[2] = { 0x88, 0xcc };
-static unsigned char eth_p_ecp[2] = { 0x88, 0x90 };
+static unsigned char eth_p_ecp[2] = { ETH_P_ECP >> 8, ETH_P_ECP & 0xff };
 
 static int verbose;
 static char *tokens[1024];	/* Used to parse command line params */
@@ -118,7 +118,7 @@ struct lldp {			/* LLDP DUs */
 unsigned long runtime;		/* Program run time in seconds */
 static struct lldp *lldphead;	/* List of commands */
 static struct lldp *er_ecp;	/* Expected replies ECP protocol */
-static struct lldp *er_evb;	/* Expected replies ECP protocol */
+static struct lldp *er_evb;	/* Expected replies EVB protocol */
 
 struct ecphdr {			/* ECP header received */
 	unsigned char version;	/* Version number */
@@ -534,7 +534,10 @@ static int addone(void)
 		exit(3);
 	p->opr = valid_cmd();
 	if (p->opr) {
-		p->ether = validate("88:90", 0);
+		char ecp_str[8];
+
+		sprintf(ecp_str, "%02x:%02x", eth_p_ecp[0], eth_p_ecp[1]);
+		p->ether = validate(ecp_str, 0);
 		goto out;
 	}
 	p->dst = validate(tokens[1], 0);

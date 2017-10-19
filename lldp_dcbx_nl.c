@@ -39,6 +39,7 @@
 #include "linux/rtnetlink.h"
 #include "linux/dcbnl.h"
 #include "lldp.h"
+#include "lldp_util.h"
 #include "dcb_types.h"
 #include "dcb_protocol.h"
 #include "dcb_driver_interface.h"
@@ -641,9 +642,10 @@ int get_hw_state(char *ifname, int *dcb_state)
 	
 int set_hw_state(char *ifname, int dcb_state)
 {
-	int err = 0;
+	int err;
+	int ifindex = get_ifidx(ifname);
 
-	err = set_linkmode(ifname, dcb_state);
+	err = set_linkmode(ifindex, ifname, dcb_state);
 
 	if (err)
 		LLDPAD_DBG("ERROR %s: set_linkmode dcbstate %i\n",
@@ -751,9 +753,9 @@ int set_hw_pfc(char *ifname, dcb_pfc_list_type pfc_data,
 
 	for (i = 0; i < MAX_TRAFFIC_CLASSES; i++) {
 		if (pfc_temp[i])
-			pfc[i] = pfc_enabled;
+			pfc[i] = PFC_ENABLED;
 		else
-			pfc[i] = pfc_disabled;
+			pfc[i] = PFC_DISABLED;
 	}
 
 	rval = set_pfc_cfg(ifname, &pfc[0]);

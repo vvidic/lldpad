@@ -446,11 +446,7 @@ static int mand_bld_ttl_tlv(struct mand_data *md, struct lldp_agent *agent)
 	}
 	memset(tlv->info, 0, tlv->length);
 
-	if (agent->tx.txTTL)
-		ttl = htons(agent->tx.txTTL);
-	else
-		ttl = htons(DEFAULT_TX_HOLD * DEFAULT_TX_INTERVAL);
-
+	ttl = htons(agent->tx.txTTL);
 	memcpy(tlv->info, &ttl, tlv->length);
 	LLDPAD_DBG("%s:%s:done:type=%d length=%d ttl=%d\n", __func__,
 		md->ifname, tlv->type, tlv->length, ntohs(ttl));
@@ -464,8 +460,9 @@ out_err:
 static int mand_bld_tlv(struct mand_data *md, struct lldp_agent *agent)
 {
 	int rc = EPERM;
+	int ifindex = get_ifidx(md->ifname);
 
-	if (!port_find_by_name(md->ifname)) {
+	if (!port_find_by_ifindex(ifindex)) {
 		rc = EEXIST;
 		goto out_err;
 	}
@@ -655,13 +652,13 @@ void mand_unregister(struct lldp_module *mod)
 	struct mand_data *md;
 
 	nameidx = if_nameindex();
-	if (nameidx == NULL) {
+	if (!nameidx) {
 		LLDPAD_DBG("error calling if_nameindex()\n");
 		return;
 	}
 
 	for (p = nameidx; p->if_index != 0; p++) {
-		port = port_find_by_name(p->if_name);
+		port = port_find_by_ifindex(p->if_index);
 		if (!port)
 			continue;
 
@@ -683,4 +680,19 @@ void mand_unregister(struct lldp_module *mod)
 	}
 	free(mod);
 	LLDPAD_INFO("%s:done\n", __func__); 
+}
+
+void mand_update_ttl(const char *ifname, u16 ttl_val)
+{
+	struct port *port = port_find_by_ifindex(get_ifidx(ifname));
+	struct lldp_agent *agent;
+
+	if (!port)
+		return;
+
+	LIST_FOREACH(agent, &port->agent_head, entry) {
+		agent->tx.txTTL = ttl_val;
+		agent->tx.localChange = 1;
+		agent->tx.txFast = agent->timers.txFastInit;
+	}
 }
