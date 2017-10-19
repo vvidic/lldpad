@@ -15,6 +15,12 @@ override_dh_auto_clean:
 	dh_auto_clean
 	-rm parse_cli.c
 
+override_dh_auto_install:
+	dh_auto_install
+	install -D lldpad.init debian/tmp/etc/init.d/lldpad
+	mkdir -p debian/tmp/lib/systemd
+	mv debian/tmp/usr/lib/systemd/system debian/tmp/lib/systemd
+
 override_dh_installinit:
 	dh_installinit -plldpad --only-scripts
 
