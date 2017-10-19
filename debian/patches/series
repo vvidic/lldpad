@@ -1,7 +1,9 @@
 fix-lintian-warning-on-lldpad-init.patch
 fix-cannot-adjust-line-in-dcbtool-8.patch
 fix-cannot-adjust-line-in-dcbtool-ets-8.patch
+fix-numeric-expression-expected-in-vdptool-8.patch
 dont-touch-var-lock-subsys-lldpad-when-start.patch
 specify_subdir-objects.patch
 gcc-warnings.patch
 bash-completion.patch
+remove-syslog-target-from-lldpad-service.patch

@@ -1,0 +1,16 @@
+Description: Remove syslog.target from lldpad.service
+ Warning about syslog.targed reported by lintian
+Author: Valentin Vidic <Valentin.Vidic@CARNet.hr>
+Last-Update: 2017-10-19
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+--- a/lldpad.service
++++ b/lldpad.service
+@@ -1,6 +1,6 @@
+ [Unit]
+ Description=Link Layer Discovery Protocol Agent Daemon.
+-After=syslog.target network.target
++After=network.target
+ 
+ [Service]
+ Type=simple

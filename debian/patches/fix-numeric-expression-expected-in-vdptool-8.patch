@@ -1,0 +1,16 @@
+Description: Fix lintian warning in vdptool manpage
+Author: Valentin Vidic <Valentin.Vidic@CARNet.hr>
+Last-Update: 2017-10-19
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+--- a/docs/vdptool.8
++++ b/docs/vdptool.8
+@@ -204,7 +204,7 @@
+ OUI field. Currently, the following values for
+ OUI are supported.
+ .RS
+-.IP cisco -
++.IP cisco
+ Specifies Cisco defined OUI.
+ .TP
+ .SH COMMANDS
